@@ -22,4 +22,39 @@
       <button class="btn btn-outline btn-sm" id="btn-exportar" onclick="modalExportar()">
         ⬇ Exportar
       </button>
-      <button class="btn btn-outline btn-sm" id="btn-d
+      <button class="btn btn-outline btn-sm" id="btn-drive-desconectar"
+        onclick="desconectarDrive()" style="display:none">
+        ☁️✕ Desconectar Drive
+      </button>
+      <button class="btn btn-outline btn-sm" id="btn-cerrar-servidor"
+        onclick="confirmarCerrarServidor()" title="Cerrar la aplicación">
+        ✕ Cerrar app
+      </button>
+    </div>
+  </nav>
+
+  <main id="app">
+    <div class="loading-initial">Cargando...</div>
+  </main>
+
+  <!-- Modal global -->
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="handleOverlayClick(event)">
+    <div class="modal" id="modal-box">
+      <div class="modal-header">
+        <h3 id="modal-title"></h3>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" id="modal-confirm">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notifications -->
+  <div id="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
