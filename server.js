@@ -60,20 +60,25 @@ app.post('/api/pacientes', (req, res) => {
     return res.status(400).json({ error: 'Nombre y apellido son requeridos' });
   const r = db.prepare(`
     INSERT INTO pacientes
-      (nombre, apellido, dni, fecha_nacimiento, telefono, obra_social, valor_hora,
+      (nombre, apellido, dni, edad, telefono, obra_social, valor_hora,
        diagnostico, imc, conductas_actuales, frecuencia, medicacion,
        estado_tto, fecha_inicio_tto,
        medica_clinica, psiquiatra, nutricionista,
-       red_familiar, motivo_consulta, notas_generales)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       red_familiar,
+       contacto_emergencia_nombre, contacto_emergencia_tel,
+       motivo_consulta, notas_generales, antecedentes, objetivos)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     f.nombre, f.apellido,
-    f.dni||null, f.fecha_nacimiento||null, f.telefono||null, f.obra_social||null,
+    f.dni||null, f.edad||null, f.telefono||null, f.obra_social||null,
     f.valor_hora||null,
     f.diagnostico||null, f.imc||null, f.conductas_actuales||null, f.frecuencia||null,
     f.medicacion||null, f.estado_tto||null, f.fecha_inicio_tto||null,
     f.medica_clinica||null, f.psiquiatra||null, f.nutricionista||null,
-    f.red_familiar||null, f.motivo_consulta||null, f.notas_generales||null
+    f.red_familiar||null,
+    f.contacto_emergencia_nombre||null, f.contacto_emergencia_tel||null,
+    f.motivo_consulta||null, f.notas_generales||null,
+    f.antecedentes||null, f.objetivos||null
   );
   res.json({ id: r.lastInsertRowid });
 });
@@ -84,21 +89,26 @@ app.put('/api/pacientes/:id', (req, res) => {
     return res.status(400).json({ error: 'Nombre y apellido son requeridos' });
   db.prepare(`
     UPDATE pacientes SET
-      nombre=?, apellido=?, dni=?, fecha_nacimiento=?, telefono=?, obra_social=?, valor_hora=?,
+      nombre=?, apellido=?, dni=?, edad=?, telefono=?, obra_social=?, valor_hora=?,
       diagnostico=?, imc=?, conductas_actuales=?, frecuencia=?, medicacion=?,
       estado_tto=?, fecha_inicio_tto=?,
       medica_clinica=?, psiquiatra=?, nutricionista=?,
-      red_familiar=?, motivo_consulta=?, notas_generales=?,
+      red_familiar=?,
+      contacto_emergencia_nombre=?, contacto_emergencia_tel=?,
+      motivo_consulta=?, notas_generales=?, antecedentes=?, objetivos=?,
       updated_at=datetime('now','localtime')
     WHERE id=?
   `).run(
     f.nombre, f.apellido,
-    f.dni||null, f.fecha_nacimiento||null, f.telefono||null, f.obra_social||null,
+    f.dni||null, f.edad||null, f.telefono||null, f.obra_social||null,
     f.valor_hora||null,
     f.diagnostico||null, f.imc||null, f.conductas_actuales||null, f.frecuencia||null,
     f.medicacion||null, f.estado_tto||null, f.fecha_inicio_tto||null,
     f.medica_clinica||null, f.psiquiatra||null, f.nutricionista||null,
-    f.red_familiar||null, f.motivo_consulta||null, f.notas_generales||null,
+    f.red_familiar||null,
+    f.contacto_emergencia_nombre||null, f.contacto_emergencia_tel||null,
+    f.motivo_consulta||null, f.notas_generales||null,
+    f.antecedentes||null, f.objetivos||null,
     req.params.id
   );
   res.json({ ok: true });

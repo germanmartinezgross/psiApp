@@ -129,6 +129,11 @@ const nuevasPacientes = [
   ['valor_hora',         'REAL'],
   ['red_familiar',       'TEXT'],
   ['motivo_baja',        'TEXT'],
+  ['edad',               'INTEGER'],
+  ['contacto_emergencia_nombre', 'TEXT'],
+  ['contacto_emergencia_tel',    'TEXT'],
+  ['antecedentes',               'TEXT'],
+  ['objetivos',                  'TEXT'],
 ];
 for (const [col, type] of nuevasPacientes) {
   if (!colsPacientes.includes(col)) {

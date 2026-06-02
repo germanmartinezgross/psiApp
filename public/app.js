@@ -510,7 +510,7 @@ function renderDatosTab() {
       ${seccion('Datos personales', [
         ['Nombre completo',    `${p.apellido}, ${p.nombre}`],
         ['DNI',                p.dni],
-        ['Fecha de nacimiento',p.fecha_nacimiento ? fmtDate(p.fecha_nacimiento) : null],
+        ['Edad',               p.edad ? `${p.edad} años` : null],
         ['Teléfono',           p.telefono],
         ['Obra Social',        p.obra_social],
         ['Valor hora',         p.obra_social === 'Particular' && p.valor_hora ? fmtMoney(p.valor_hora) : null],
@@ -533,6 +533,13 @@ function renderDatosTab() {
         ['Nutricionista',  p.nutricionista],
       ])}
 
+      ${(p.contacto_emergencia_nombre || p.contacto_emergencia_tel)
+        ? seccion('Contacto de emergencia', [
+            ['Nombre',    p.contacto_emergencia_nombre],
+            ['Teléfono',  p.contacto_emergencia_tel],
+          ])
+        : ''}
+
       ${(() => {
         let integrantes = [];
         try { integrantes = JSON.parse(p.red_familiar || '[]'); } catch {}
@@ -548,6 +555,8 @@ function renderDatosTab() {
       })()}
 
       ${bloqueTexto('Motivo de consulta', p.motivo_consulta)}
+      ${bloqueTexto('Antecedentes relevantes', p.antecedentes)}
+      ${bloqueTexto('Objetivos terapéuticos', p.objetivos)}
       ${bloqueTexto('Notas generales', p.notas_generales)}
 
       ${!p.motivo_consulta && !p.notas_generales && !p.diagnostico ? `
@@ -760,8 +769,8 @@ function _formPaciente(p = {}) {
         <input id="f-dni" class="form-input" type="text" value="${esc(p.dni||'')}" placeholder="Ej: 30456789">
       </div>
       <div class="form-group">
-        <label class="form-label">Fecha de nacimiento</label>
-        <input id="f-fnac" class="form-input" type="date" value="${p.fecha_nacimiento||''}">
+        <label class="form-label">Edad</label>
+        <input id="f-edad" class="form-input" type="number" min="1" max="120" value="${p.edad||''}" placeholder="Ej: 25">
       </div>
     </div>
     <div class="form-row">
@@ -848,6 +857,18 @@ function _formPaciente(p = {}) {
       <input id="f-nutri" class="form-input" type="text" value="${esc(p.nutricionista||'')}" placeholder="Nombre y/o institución">
     </div>
 
+    <div class="form-section-title">Contacto de emergencia</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Nombre</label>
+        <input id="f-ce-nombre" class="form-input" type="text" value="${esc(p.contacto_emergencia_nombre||'')}" placeholder="Nombre completo">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Teléfono</label>
+        <input id="f-ce-tel" class="form-input" type="text" value="${esc(p.contacto_emergencia_tel||'')}" placeholder="Ej: 11-5678-9012">
+      </div>
+    </div>
+
     <div class="form-section-title">Red familiar</div>
     <div id="red-familiar-container">
       ${_renderRedFamiliar(p.red_familiar)}
@@ -865,6 +886,16 @@ function _formPaciente(p = {}) {
       <label class="form-label">Notas generales</label>
       <textarea id="f-notas" class="form-textarea" rows="4"
         placeholder="Observaciones generales, evolución...">${esc(p.notas_generales||'')}</textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Antecedentes relevantes</label>
+      <textarea id="f-antecedentes" class="form-textarea" rows="4"
+        placeholder="Antecedentes clínicos, familiares, personales...">${esc(p.antecedentes||'')}</textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Objetivos terapéuticos</label>
+      <textarea id="f-objetivos" class="form-textarea" rows="4"
+        placeholder="Objetivos acordados para el tratamiento...">${esc(p.objetivos||'')}</textarea>
     </div>`;
 }
 
@@ -945,7 +976,7 @@ function _collectPaciente() {
   return {
     nombre, apellido,
     dni:               document.getElementById('f-dni').value.trim()          || null,
-    fecha_nacimiento:  document.getElementById('f-fnac').value                || null,
+    edad:              parseInt(document.getElementById('f-edad').value) || null,
     telefono:          document.getElementById('f-tel').value.trim()          || null,
     obra_social:       obra_social                                             || null,
     valor_hora:        !isNaN(valorHoraVal) && valorHoraVal > 0 ? valorHoraVal: null,
@@ -959,9 +990,13 @@ function _collectPaciente() {
     medica_clinica:    document.getElementById('f-medica').value.trim()       || null,
     psiquiatra:        document.getElementById('f-psiquiatra').value.trim()   || null,
     nutricionista:     document.getElementById('f-nutri').value.trim()        || null,
+    contacto_emergencia_nombre: document.getElementById('f-ce-nombre').value.trim() || null,
+    contacto_emergencia_tel:    document.getElementById('f-ce-tel').value.trim()    || null,
     red_familiar:      _collectRedFamiliar(),
     motivo_consulta:   document.getElementById('f-motivo').value.trim()       || null,
     notas_generales:   document.getElementById('f-notas').value.trim()        || null,
+    antecedentes:      document.getElementById('f-antecedentes').value.trim() || null,
+    objetivos:         document.getElementById('f-objetivos').value.trim()    || null,
   };
 }
 
