@@ -1681,14 +1681,22 @@ async function modalNuevaSesionCalendario(fechaPreset) {
   openModal('Nueva sesión', `
     <div class="form-group">
       <label class="form-label">Paciente *</label>
-      <input id="f-paciente-buscar" class="form-input" type="text"
-        placeholder="🔍 Escribí el nombre para buscar..."
-        oninput="filtrarPacientesCal(this.value)"
-        autocomplete="off">
-      <select id="f-paciente-cal" class="form-select" size="5" style="margin-top:.35rem;height:auto">
-        <option value="">— Seleccionar paciente —</option>
-        ${opcionesPacientes}
-      </select>
+      <div class="pac-selector">
+        <input id="f-paciente-buscar" class="pac-selector-input" type="text"
+          placeholder="🔍 Buscar paciente..."
+          oninput="filtrarPacientesCal(this.value)"
+          autocomplete="off">
+        <div id="f-paciente-lista" class="pac-selector-lista">
+          <div class="pac-selector-item pac-selector-placeholder">— Seleccionar paciente —</div>
+          ${pacientes.map(p =>
+            `<div class="pac-selector-item" data-id="${p.id}" onclick="seleccionarPacienteCal(this)">
+              <span class="pac-selector-nombre">${esc(p.apellido)}, ${esc(p.nombre)}</span>
+              ${p.obra_social ? `<span class="pac-selector-badge">${esc(p.obra_social)}</span>` : ''}
+            </div>`
+          ).join('')}
+        </div>
+        <input type="hidden" id="f-paciente-cal" value="">
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -1753,22 +1761,31 @@ async function modalNuevaSesionCalendario(fechaPreset) {
   });
 }
 
+function seleccionarPacienteCal(el) {
+  // Quitar selección previa
+  document.querySelectorAll('.pac-selector-item.selected').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('f-paciente-cal').value = el.dataset.id;
+  // Actualizar el input de búsqueda con el nombre seleccionado
+  const nombre = el.querySelector('.pac-selector-nombre')?.textContent || '';
+  document.getElementById('f-paciente-buscar').value = nombre;
+  // Colapsar la lista (opcional: dejarla abierta también está bien)
+}
+
 function filtrarPacientesCal(texto) {
-  const sel   = document.getElementById('f-paciente-cal');
-  if (!sel) return;
-  const lista = window._calPacientesList || [];
-  const q     = texto.toLowerCase().trim();
-  const filtrados = q
-    ? lista.filter(p =>
-        `${p.nombre} ${p.apellido}`.toLowerCase().includes(q) ||
-        `${p.apellido} ${p.nombre}`.toLowerCase().includes(q) ||
-        (p.dni||'').includes(q)
-      )
-    : lista;
-  sel.innerHTML = '<option value="">— Seleccionar paciente —</option>' +
-    filtrados.map(p =>
-      `<option value="${p.id}">${esc(p.apellido)}, ${esc(p.nombre)}${p.obra_social ? ` — ${esc(p.obra_social)}` : ''}</option>`
-    ).join('');
+  const lista  = document.getElementById('f-paciente-lista');
+  if (!lista) return;
+  const items  = lista.querySelectorAll('.pac-selector-item:not(.pac-selector-placeholder)');
+  const q      = texto.toLowerCase().trim();
+  // Limpiar selección si el usuario está buscando de nuevo
+  if (q) {
+    document.getElementById('f-paciente-cal').value = '';
+    document.querySelectorAll('.pac-selector-item.selected').forEach(e => e.classList.remove('selected'));
+  }
+  items.forEach(item => {
+    const nombre = item.querySelector('.pac-selector-nombre')?.textContent.toLowerCase() || '';
+    item.style.display = (!q || nombre.includes(q)) ? '' : 'none';
+  });
 }
 
 function _buildMonthGrid(year, month, evMap) {
