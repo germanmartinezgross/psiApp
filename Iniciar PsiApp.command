@@ -1,13 +1,16 @@
 #!/bin/bash
 # ============================================================
 # Iniciar PsiApp — Mac / Linux
+# Para usar: doble clic sobre este archivo
+# (Si no abre, hacé clic derecho → Abrir)
 # ============================================================
 
+# Ir a la carpeta donde está este script
 cd "$(dirname "$0")"
 
+# Color para mensajes
 VERDE='\033[0;32m'
 ROJO='\033[0;31m'
-AMARILLO='\033[0;33m'
 RESET='\033[0m'
 
 echo ""
@@ -25,32 +28,17 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
-# Actualizar desde GitHub si git está disponible
-if command -v git &> /dev/null; then
-    echo -e "${AMARILLO}  Buscando actualizaciones...${RESET}"
-    git pull origin master 2>&1
-    if [ $? -ne 0 ]; then
-        echo "  AVISO: No se pudo actualizar. Continuando con versión local..."
-    else
-        echo -e "${VERDE}  Todo actualizado.${RESET}"
-    fi
-    echo ""
-else
-    echo "  (Git no instalado - saltando actualización)"
-    echo ""
-fi
-
-# Instalar/actualizar dependencias
+# Instalar dependencias si no existen
 if [ ! -d "node_modules" ]; then
     echo "  Instalando dependencias por primera vez..."
+    echo "  (esto puede tardar un minuto)"
+    echo ""
     npm install
     if [ $? -ne 0 ]; then
         echo -e "${ROJO}  ERROR al instalar dependencias.${RESET}"
         read -p "  Presioná Enter para cerrar..."
         exit 1
     fi
-else
-    npm install --silent 2>/dev/null
 fi
 
 echo -e "${VERDE}  Servidor iniciando...${RESET}"
@@ -58,8 +46,10 @@ echo "  La app se abrirá en el navegador en unos segundos."
 echo "  Para cerrar la app: cerrá esta ventana."
 echo ""
 
+# Abrir el navegador después de 3 segundos (en segundo plano)
 (sleep 3 && open "http://localhost:3000" 2>/dev/null || xdg-open "http://localhost:3000" 2>/dev/null) &
 
+# Iniciar el servidor
 npm start
 
 echo ""

@@ -1357,6 +1357,10 @@ function modalExportar() {
           <span>📊 <strong>Excel</strong> — datos de pacientes, sesiones y pagos</span>
         </label>
         <label class="tipo-sesion-option">
+          <input type="radio" name="formato-exp" value="backup">
+          <span>🗄️ <strong>Backup</strong> — ZIP con la carpeta <code>data</code> (base de datos completa)</span>
+        </label>
+        <label class="tipo-sesion-option">
           <input type="radio" name="formato-exp" value="completo">
           <span>📦 <strong>Completo</strong> — Excel + Historia Clínica (.docx) de cada paciente en un ZIP</span>
         </label>
@@ -1391,6 +1395,17 @@ function modalExportar() {
       } else if (formato === 'excel' && destino === 'drive') {
         closeModal();
         await _exportarExcelDrive();
+      } else if (formato === 'backup' && destino === 'pc') {
+        closeModal();
+        window.location.href = '/api/export/backup';
+        showToast('Descargando backup... ⬇', 'info');
+      } else if (formato === 'backup' && destino === 'drive') {
+        const res  = await fetch('/api/export/backup-drive', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        closeModal();
+        showToast('☁️ Backup subido a Drive');
+        if (data.link) window.open(data.link, '_blank');
       } else if (formato === 'completo' && destino === 'pc') {
         closeModal();
         window.location.href = '/api/export/completo';

@@ -1345,6 +1345,57 @@ app.post('/api/export/completo-drive', async (req, res) => {
   }
 });
 
+// ─── BACKUP DE LA CARPETA DATA ────────────────────────────────────────────────
+
+app.get('/api/export/backup', (req, res) => {
+  try {
+    const archiver = require('archiver');
+    const fecha    = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="PsiApp-Backup-${fecha}.zip"`);
+    res.setHeader('Content-Type', 'application/zip');
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+    archive.directory(path.join(__dirname, 'data'), 'data');
+    archive.finalize();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/export/backup-drive', async (req, res) => {
+  if (!gauth) return res.status(500).json({ error: 'Google no configurado' });
+  const client = gauth.createClient();
+  const tokens = gauth.getTokens();
+  if (!client || !tokens) return res.status(401).json({ estado: 'sin_autorizar' });
+  try {
+    const { google } = require('googleapis');
+    const archiver   = require('archiver');
+    const { PassThrough } = require('stream');
+
+    client.setCredentials(tokens);
+    client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
+
+    // Generar el ZIP en memoria usando un PassThrough stream
+    const pass    = new PassThrough();
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(pass);
+    archive.directory(path.join(__dirname, 'data'), 'data');
+    archive.finalize();
+
+    const fecha    = new Date().toISOString().slice(0, 10);
+    const drive    = google.drive({ version: 'v3', auth: client });
+    const resp     = await drive.files.create({
+      requestBody: { name: `PsiApp-Backup-${fecha}.zip`,
+        mimeType: 'application/zip' },
+      media: { mimeType: 'application/zip', body: pass },
+      fields: 'id,name,webViewLink',
+    });
+    res.json({ ok: true, nombre: resp.data.name, link: resp.data.webViewLink });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── CERRAR SERVIDOR ─────────────────────────────────────────────────────────
 
 app.post('/api/shutdown', (req, res) => {
