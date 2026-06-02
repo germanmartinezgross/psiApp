@@ -60,17 +60,17 @@ app.post('/api/pacientes', (req, res) => {
     return res.status(400).json({ error: 'Nombre y apellido son requeridos' });
   const r = db.prepare(`
     INSERT INTO pacientes
-      (nombre, apellido, dni, edad, telefono, obra_social, valor_hora,
+      (nombre, apellido, dni, edad, telefono, email, obra_social, valor_hora,
        diagnostico, imc, conductas_actuales, frecuencia, medicacion,
        estado_tto, fecha_inicio_tto,
        medica_clinica, psiquiatra, nutricionista,
        red_familiar,
        contacto_emergencia_nombre, contacto_emergencia_tel,
        motivo_consulta, notas_generales, antecedentes, objetivos)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     f.nombre, f.apellido,
-    f.dni||null, f.edad||null, f.telefono||null, f.obra_social||null,
+    f.dni||null, f.edad||null, f.telefono||null, f.email||null, f.obra_social||null,
     f.valor_hora||null,
     f.diagnostico||null, f.imc||null, f.conductas_actuales||null, f.frecuencia||null,
     f.medicacion||null, f.estado_tto||null, f.fecha_inicio_tto||null,
@@ -89,7 +89,7 @@ app.put('/api/pacientes/:id', (req, res) => {
     return res.status(400).json({ error: 'Nombre y apellido son requeridos' });
   db.prepare(`
     UPDATE pacientes SET
-      nombre=?, apellido=?, dni=?, edad=?, telefono=?, obra_social=?, valor_hora=?,
+      nombre=?, apellido=?, dni=?, edad=?, telefono=?, email=?, obra_social=?, valor_hora=?,
       diagnostico=?, imc=?, conductas_actuales=?, frecuencia=?, medicacion=?,
       estado_tto=?, fecha_inicio_tto=?,
       medica_clinica=?, psiquiatra=?, nutricionista=?,
@@ -100,7 +100,7 @@ app.put('/api/pacientes/:id', (req, res) => {
     WHERE id=?
   `).run(
     f.nombre, f.apellido,
-    f.dni||null, f.edad||null, f.telefono||null, f.obra_social||null,
+    f.dni||null, f.edad||null, f.telefono||null, f.email||null, f.obra_social||null,
     f.valor_hora||null,
     f.diagnostico||null, f.imc||null, f.conductas_actuales||null, f.frecuencia||null,
     f.medicacion||null, f.estado_tto||null, f.fecha_inicio_tto||null,
@@ -147,11 +147,11 @@ app.delete('/api/pacientes/:id/eliminar', (req, res) => {
  * Crea o actualiza un evento en Google Calendar para una sesión.
  * Retorna el gcal_event_id creado, o null si Google no está conectado.
  */
-async function syncGcalEvento({ gcalEventId, paciente, fecha, hora, duracion_minutos, notas }) {
-  if (!gauth) return null;
+async function syncGcalEvento({ gcalEventId, paciente, fecha, hora, duracion_minutos, notas, conMeet = false, attendeeEmail = null }) {
+  if (!gauth) return { id: gcalEventId || null, meetLink: null };
   const client = gauth.createClient();
   const tokens = gauth.getTokens();
-  if (!client || !tokens) return null;
+  if (!client || !tokens) return { id: gcalEventId || null, meetLink: null };
 
   try {
     const { google } = require('googleapis');
@@ -159,44 +159,71 @@ async function syncGcalEvento({ gcalEventId, paciente, fecha, hora, duracion_min
     client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
     const cal = google.calendar({ version: 'v3', auth: client });
 
-    // Armar fechas: si hay hora usamos datetime, si no usamos date (evento de día completo)
     let startObj, endObj;
     if (hora) {
       const tz      = 'America/Argentina/Buenos_Aires';
-      const startDT = `${fecha}T${hora}:00`;
-      const durMin  = duracion_minutos || 50;
-      // Calcular hora de fin
       const [h, m]  = hora.split(':').map(Number);
+      const durMin  = duracion_minutos || 45;
       const endMin  = h * 60 + m + durMin;
       const endH    = String(Math.floor(endMin / 60) % 24).padStart(2, '0');
       const endM    = String(endMin % 60).padStart(2, '0');
-      const endDT   = `${fecha}T${endH}:${endM}:00`;
-      startObj = { dateTime: startDT, timeZone: tz };
-      endObj   = { dateTime: endDT,   timeZone: tz };
+      startObj = { dateTime: `${fecha}T${hora}:00`, timeZone: tz };
+      endObj   = { dateTime: `${fecha}T${endH}:${endM}:00`, timeZone: tz };
     } else {
       startObj = { date: fecha };
       endObj   = { date: fecha };
     }
+
+    // Obtener mail de la psicóloga desde Google
+    let organizerEmail = null;
+    try {
+      const oauth2 = google.oauth2({ version: 'v2', auth: client });
+      const me = await oauth2.userinfo.get();
+      organizerEmail = me.data.email;
+    } catch {}
+
+    const attendees = [];
+    if (organizerEmail) attendees.push({ email: organizerEmail });
+    if (attendeeEmail && attendeeEmail !== organizerEmail)
+      attendees.push({ email: attendeeEmail });
 
     const eventBody = {
       summary:     `🧠 Sesión — ${paciente.apellido}, ${paciente.nombre}`,
       description: notas || '',
       start:       startObj,
       end:         endObj,
+      attendees:   attendees.length ? attendees : undefined,
     };
 
+    if (conMeet) {
+      eventBody.conferenceData = {
+        createRequest: {
+          requestId: `psiapp-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          conferenceSolutionKey: { type: 'hangoutsMeet' },
+        },
+      };
+    }
+
+    const cdv = conMeet ? 1 : 0;
+
     if (gcalEventId) {
-      // Actualizar evento existente
-      await cal.events.update({ calendarId: 'primary', eventId: gcalEventId, requestBody: eventBody });
-      return gcalEventId;
+      const r = await cal.events.update({
+        calendarId: 'primary', eventId: gcalEventId,
+        conferenceDataVersion: cdv, requestBody: eventBody,
+        sendUpdates: attendeeEmail ? 'all' : 'none',
+      });
+      return { id: gcalEventId, meetLink: r.data.hangoutLink || null };
     } else {
-      // Crear evento nuevo
-      const r = await cal.events.insert({ calendarId: 'primary', requestBody: eventBody });
-      return r.data.id;
+      const r = await cal.events.insert({
+        calendarId: 'primary',
+        conferenceDataVersion: cdv, requestBody: eventBody,
+        sendUpdates: attendeeEmail ? 'all' : 'none',
+      });
+      return { id: r.data.id, meetLink: r.data.hangoutLink || null };
     }
   } catch (err) {
-    console.warn('Google Calendar sync error (no bloqueante):', err.message);
-    return gcalEventId || null; // devuelve el id previo si ya tenía
+    console.warn('Google Calendar sync error:', err.message);
+    return { id: gcalEventId || null, meetLink: null };
   }
 }
 
@@ -226,69 +253,165 @@ app.get('/api/pacientes/:id/sesiones', (req, res) => {
 });
 
 app.post('/api/sesiones', async (req, res) => {
-  const { paciente_id, fecha, hora, duracion_minutos, tipo_sesion, notas } = req.body;
+  const { paciente_id, fecha, hora, duracion_minutos, tipo_sesion, notas,
+          con_meet, semanas_recurrencia } = req.body;
   if (!paciente_id || !fecha)
     return res.status(400).json({ error: 'paciente_id y fecha son requeridos' });
 
-  const paciente = db.prepare('SELECT nombre, apellido, obra_social, valor_hora FROM pacientes WHERE id=?').get(paciente_id);
+  const paciente = db.prepare('SELECT nombre, apellido, obra_social, valor_hora, email, frecuencia FROM pacientes WHERE id=?').get(paciente_id);
+  const conMeet  = !!con_meet;
+  const cantidad = parseInt(semanas_recurrencia) || 1; // cantidad de ocurrencias
 
-  const r = db.prepare(`
-    INSERT INTO sesiones (paciente_id, fecha, hora, duracion_minutos, tipo_sesion, notas)
-    VALUES (?,?,?,?,?,?)
-  `).run(paciente_id, fecha, hora||null, duracion_minutos||45, tipo_sesion||'individual', notas||null);
-
-  // Sincronizar con Google Calendar
-  const gcalId = await syncGcalEvento({
-    gcalEventId: null, paciente, fecha, hora, duracion_minutos, notas,
-  });
-  if (gcalId) {
-    db.prepare(`UPDATE sesiones SET gcal_event_id=? WHERE id=?`).run(gcalId, r.lastInsertRowid);
+  // Intervalo en días según la frecuencia del paciente
+  function intervaloDias(frecuencia) {
+    if (!frecuencia) return 7;
+    const f = frecuencia.toLowerCase();
+    if (f.includes('quincenal') || f.includes('15') || f.includes('quince')) return 14;
+    if (f.includes('3 semana') || f.includes('tres semana')) return 21;
+    if (f.includes('mensual') || f.includes('mes')) return 28;
+    return 7; // semanal por defecto
   }
 
-  // Auto-pago: Particular siempre; La Ventana siempre; La Casita NUNCA
+  const diasIntervalo = intervaloDias(paciente?.frecuencia);
+
+  function sumarDias(fechaStr, n) {
+    const [y, m, d] = fechaStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + n * diasIntervalo);
+    return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+  }
+
+  const fechas  = Array.from({ length: cantidad }, (_, i) => sumarDias(fecha, i));
+  const grupoId = cantidad > 1 ? `rec-${Date.now()}-${paciente_id}` : null;
+
+  const insertSesion = db.prepare(`
+    INSERT INTO sesiones (paciente_id, fecha, hora, duracion_minutos, tipo_sesion, notas, recurrente_grupo)
+    VALUES (?,?,?,?,?,?,?)
+  `);
+
   const tipoGrupal = ['vincular','familiar'].includes(tipo_sesion);
   const esCasita   = !paciente?.obra_social ||
     !['Particular','La Ventana'].includes(paciente.obra_social);
 
-  let pagoR = null;
-  if (!esCasita) {
-    let monto = 0;
-    if (paciente.obra_social === 'Particular') {
-      monto = paciente.valor_hora || 0;
-    } else if (paciente.obra_social === 'La Ventana') {
-      if (tipoGrupal) {
-        // Vincular o Familiar → valor grupal de La Ventana
-        const cfg = db.prepare(`SELECT valor FROM configuracion WHERE clave='valor_hora_ventana_grupal'`).get();
-        monto = cfg ? parseFloat(cfg.valor) : 70000;
-      } else {
-        // Individual → valor estándar de La Ventana
-        const cfg = db.prepare(`SELECT valor FROM configuracion WHERE clave='valor_hora_ventana'`).get();
-        monto = cfg ? parseFloat(cfg.valor) : 38500;
+  function calcularMonto(fechaSesion) {
+    if (esCasita) return 0;
+    if (paciente.obra_social === 'Particular') return paciente.valor_hora || 0;
+    if (paciente.obra_social === 'La Ventana') {
+      const clave = tipoGrupal ? 'valor_hora_ventana_grupal' : 'valor_hora_ventana';
+      const cfg = db.prepare(`SELECT valor FROM configuracion WHERE clave=?`).get(clave);
+      return cfg ? parseFloat(cfg.valor) : 0;
+    }
+    return 0;
+  }
+
+  const sesionesCreadas = [];
+
+  for (let i = 0; i < fechas.length; i++) {
+    const f = fechas[i];
+    const r = insertSesion.run(paciente_id, f, hora||null, duracion_minutos||45,
+                               tipo_sesion||'individual', i === 0 ? notas||null : null,
+                               grupoId);
+    const sesionId = r.lastInsertRowid;
+
+    // Google Calendar: solo primera lleva al paciente en Meet (si tiene mail)
+    const esFirst = i === 0;
+    const attendeeEmail = (conMeet && esFirst && paciente.email) ? paciente.email : null;
+
+    const gcalResult = await syncGcalEvento({
+      gcalEventId: null, paciente, fecha: f, hora,
+      duracion_minutos, notas: i === 0 ? notas : null,
+      conMeet, attendeeEmail,
+    });
+
+    db.prepare(`UPDATE sesiones SET gcal_event_id=?, meet_link=? WHERE id=?`)
+      .run(gcalResult.id, gcalResult.meetLink, sesionId);
+
+    // Auto-pago (solo si corresponde)
+    let pagoR = null;
+    if (!esCasita) {
+      const monto  = calcularMonto(f);
+      const credRow = db.prepare('SELECT saldo FROM credito_paciente WHERE paciente_id=?').get(paciente_id);
+      const credito  = credRow ? credRow.saldo : 0;
+
+      if (credito >= monto && monto > 0) {
+        const nuevoSaldo = credito - monto;
+        db.prepare(`INSERT OR REPLACE INTO credito_paciente (paciente_id, saldo, updated_at)
+          VALUES (?, ?, datetime('now','localtime'))`).run(paciente_id, nuevoSaldo);
+        pagoR = { monto: 0, credito_usado: monto };
+      } else if (monto > 0) {
+        // Usar la moneda del último pago del paciente, si existe
+        const ultimoPago = db.prepare(
+          `SELECT moneda FROM pagos WHERE paciente_id=? ORDER BY fecha DESC, id DESC LIMIT 1`
+        ).get(paciente_id);
+        const monedaAuto = ultimoPago?.moneda || 'pesos';
+
+        const pr = db.prepare(`
+          INSERT INTO pagos (paciente_id, fecha, monto, moneda, estado, metodo, notas)
+          VALUES (?,?,?,?,?,?,?)
+        `).run(paciente_id, f, monto, monedaAuto, 'pendiente', 'transferencia', `Sesión del ${f}`);
+        pagoR = { id: pr.lastInsertRowid, monto };
       }
     }
 
-    // Verificar si tiene crédito disponible
-    const credRow = db.prepare('SELECT saldo FROM credito_paciente WHERE paciente_id=?').get(paciente_id);
-    const credito  = credRow ? credRow.saldo : 0;
-
-    if (credito >= monto && monto > 0) {
-      // Descuenta del crédito, no genera línea de pago
-      const nuevoSaldo = credito - monto;
-      db.prepare(`INSERT OR REPLACE INTO credito_paciente (paciente_id, saldo, updated_at)
-        VALUES (?, ?, datetime('now','localtime'))`).run(paciente_id, nuevoSaldo);
-      pagoR = { monto: 0, credito_usado: monto, saldo_restante: nuevoSaldo };
-    } else {
-      pagoR = db.prepare(`
-        INSERT INTO pagos (paciente_id, fecha, monto, moneda, estado, metodo, notas)
-        VALUES (?,?,?,?,?,?,?)
-      `).run(paciente_id, fecha, monto, 'pesos', 'pendiente', 'transferencia', `Sesión del ${fecha}`);
-      pagoR = { id: pagoR.lastInsertRowid, monto };
+    if (i === 0) {
+      sesionesCreadas.push({
+        id: sesionId,
+        gcal: !!gcalResult.id,
+        meetLink: gcalResult.meetLink,
+        pago: pagoR,
+      });
     }
   }
 
-  res.json({ id: r.lastInsertRowid, gcal: !!gcalId, pago: pagoR });
+  const primera = sesionesCreadas[0] || {};
+  res.json({
+    id: primera.id,
+    gcal: primera.gcal,
+    meetLink: primera.meetLink,
+    pago: primera.pago,
+    totalCreadas: fechas.length,
+  });
 });
 
+// Marcar sesión como completa y enviar Meet a paciente para la siguiente sesión
+app.post('/api/sesiones/:id/completar', async (req, res) => {
+  const { notas } = req.body;
+  const sesion = db.prepare(`
+    SELECT s.*, p.nombre, p.apellido, p.email, p.obra_social, p.valor_hora,
+           s.recurrente_grupo, s.meet_link, s.gcal_event_id
+    FROM sesiones s JOIN pacientes p ON p.id = s.paciente_id
+    WHERE s.id=?
+  `).get(req.params.id);
+  if (!sesion) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+  // Marcar como completa y guardar notas si se pasaron
+  db.prepare(`UPDATE sesiones SET completada=1, notas=COALESCE(?, notas) WHERE id=?`)
+    .run(notas || null, req.params.id);
+
+  // Si hay grupo recurrente, buscar la siguiente sesión NO completada
+  let siguienteEnviada = false;
+  if (sesion.recurrente_grupo && sesion.meet_link) {
+    const siguiente = db.prepare(`
+      SELECT * FROM sesiones
+      WHERE recurrente_grupo=? AND fecha > ? AND completada=0
+      ORDER BY fecha ASC LIMIT 1
+    `).get(sesion.recurrente_grupo, sesion.fecha);
+
+    if (siguiente && siguiente.gcal_event_id && sesion.email) {
+      // Actualizar evento de la siguiente sesión para añadir al paciente como invitado
+      const paciente = { nombre: sesion.nombre, apellido: sesion.apellido };
+      await syncGcalEvento({
+        gcalEventId: siguiente.gcal_event_id,
+        paciente, fecha: siguiente.fecha,
+        hora: siguiente.hora, duracion_minutos: siguiente.duracion_minutos,
+        conMeet: true, attendeeEmail: sesion.email,
+      });
+      siguienteEnviada = true;
+    }
+  }
+
+  res.json({ ok: true, siguienteEnviada });
+});
 app.put('/api/sesiones/:id', async (req, res) => {
   const { fecha, hora, duracion_minutos, tipo_sesion, notas } = req.body;
   const sesion   = db.prepare('SELECT gcal_event_id, paciente_id FROM sesiones WHERE id=?').get(req.params.id);
@@ -298,11 +421,11 @@ app.put('/api/sesiones/:id', async (req, res) => {
     .run(fecha, hora||null, duracion_minutos||45, tipo_sesion||'individual', notas||null, req.params.id);
 
   if (paciente) {
-    const gcalId = await syncGcalEvento({
+    const gcalResult = await syncGcalEvento({
       gcalEventId: sesion.gcal_event_id, paciente, fecha, hora, duracion_minutos, notas,
     });
-    if (gcalId && gcalId !== sesion.gcal_event_id) {
-      db.prepare(`UPDATE sesiones SET gcal_event_id=? WHERE id=?`).run(gcalId, req.params.id);
+    if (gcalResult.id && gcalResult.id !== sesion.gcal_event_id) {
+      db.prepare(`UPDATE sesiones SET gcal_event_id=? WHERE id=?`).run(gcalResult.id, req.params.id);
     }
   }
   res.json({ ok: true });
@@ -505,11 +628,25 @@ app.get('/api/stats', (req, res) => {
 
   const notasDashboard = db.prepare(`SELECT valor FROM configuracion WHERE clave='notas_dashboard'`).get()?.valor || '';
 
+  // Ingresos del mes actual y mes anterior
+  const cobradoMesActual = db.prepare(`
+    SELECT COALESCE(SUM(monto), 0) AS total FROM pagos
+    WHERE estado='pagado'
+    AND strftime('%Y-%m', fecha) = strftime('%Y-%m', date('now','localtime'))
+  `).get().total;
+
+  const cobradoMesPasado = db.prepare(`
+    SELECT COALESCE(SUM(monto), 0) AS total FROM pagos
+    WHERE estado='pagado'
+    AND strftime('%Y-%m', fecha) = strftime('%Y-%m', date('now','localtime','-1 month'))
+  `).get().total;
+
   res.json({
     totalPacientes, sesionesMes, pendientes, montoPendiente,
     pacientesParticular, pacientesVentana, pacientesCasita,
     valorHoraVentana, valorHoraVentanaGrupal, proximasSesiones,
     recordatorioAumento, notasDashboard,
+    cobradoMesActual, cobradoMesPasado,
   });
 });
 

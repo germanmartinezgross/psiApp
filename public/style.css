@@ -1200,3 +1200,37 @@ textarea, input, select { font-family: var(--font); }
   white-space: nowrap;
   flex-shrink: 0;
 }
+
+/* ─── SESIÓN COMPLETADA ─────────────────────────────────────────────────────── */
+.sesion-completada {
+  opacity: .75;
+  background: #FAFBFC;
+}
+.sesion-completada .sesion-header strong {
+  color: var(--text-light);
+}
+
+/* ─── SESIONES FUTURAS OCULTAS ──────────────────────────────────────────────── */
+.sesion-proxima-label {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--primary);
+  padding: .75rem 1.4rem .1rem;
+  border-top: 1px solid var(--border);
+}
+
+.sesion-futuras-ocultas {
+  border-top: 1px solid var(--border);
+  padding: .6rem 1.4rem;
+}
+
+.sesion-ver-futuras {
+  color: var(--text-light);
+  font-size: .82rem;
+  width: 100%;
+  text-align: left;
+  padding: .25rem 0;
+}
+.sesion-ver-futuras:hover { color: var(--primary); background: none; }

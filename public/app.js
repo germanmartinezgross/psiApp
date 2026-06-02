@@ -152,6 +152,22 @@ async function renderDashboard() {
         </div>
       </div>
 
+      <div class="card">
+        <div class="card-header">
+          <h2>💵 Ingresos</h2>
+        </div>
+        <div class="pagos-summary" style="padding:.75rem 1.4rem 1rem">
+          <div class="pago-sum-item">
+            <span>Mes actual</span>
+            <strong class="text-success" style="font-size:1.15rem">${fmtMoney(s.cobradoMesActual)}</strong>
+          </div>
+          <div class="pago-sum-item">
+            <span>Mes pasado</span>
+            <strong style="font-size:1.15rem">${fmtMoney(s.cobradoMesPasado)}</strong>
+          </div>
+        </div>
+      </div>
+
       <div class="card notas-dashboard-card">
         <div class="card-header">
           <h2>📝 Notas</h2>
@@ -512,6 +528,7 @@ function renderDatosTab() {
         ['DNI',                p.dni],
         ['Edad',               p.edad ? `${p.edad} años` : null],
         ['Teléfono',           p.telefono],
+        ['Email',              p.email],
         ['Obra Social',        p.obra_social],
         ['Valor hora',         p.obra_social === 'Particular' && p.valor_hora ? fmtMoney(p.valor_hora) : null],
       ])}
@@ -572,25 +589,70 @@ async function renderSesionesTab(pacienteId) {
   const sesiones = await api('GET', `/pacientes/${pacienteId}/sesiones`);
   cache.sesiones = sesiones;
 
-  const itemsHTML = sesiones.length
-    ? sesiones.map(s => `
-        <div class="sesion-item">
-          <div class="sesion-header">
-            <div style="display:flex;align-items:center;gap:.6rem">
-              <strong>${fmtDate(s.fecha)}</strong>
-              ${s.hora ? `<span class="text-light">${s.hora}</span>` : ''}
-              <span class="badge badge-neutral">${s.duracion_minutos} min</span>
-            </div>
-            <div class="sesion-actions">
-              <button class="btn btn-sm btn-ghost" onclick="modalEditarSesion(${s.id}, ${pacienteId})">✏️ Editar</button>
-              <button class="btn btn-sm btn-danger" onclick="confirmarEliminarSesion(${s.id}, ${pacienteId})">🗑</button>
-            </div>
+  const hoy = today();
+
+  // Separar pasadas (fecha <= hoy) y futuras (fecha > hoy)
+  const pasadas = sesiones.filter(s => s.fecha <= hoy);
+  const futuras  = sesiones.filter(s => s.fecha > hoy).sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+  // Solo mostrar la próxima sesión futura; las demás quedan ocultas
+  const proximaFutura   = futuras[0] || null;
+  const futurasOcultas  = futuras.slice(1);
+
+  function renderSesionItem(s) {
+    return `
+      <div class="sesion-item">
+        <div class="sesion-header">
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <strong>${fmtDate(s.fecha)}</strong>
+            ${s.hora ? `<span class="text-light">${s.hora}</span>` : ''}
+            <span class="badge badge-neutral">${s.duracion_minutos} min</span>
+            ${s.tipo_sesion && s.tipo_sesion !== 'individual' ? `<span class="badge badge-info">${s.tipo_sesion}</span>` : ''}
+            ${s.meet_link ? `<a href="${s.meet_link}" target="_blank" class="badge badge-success" style="text-decoration:none">🎥 Meet</a>` : ''}
+            ${s.completada ? `<span class="badge badge-success">✓ Completada</span>` : ''}
+            ${s.recurrente_grupo ? `<span class="badge badge-neutral" title="Sesión recurrente">🔁</span>` : ''}
           </div>
-          ${s.notas
-            ? `<p class="sesion-notas">${esc(s.notas)}</p>`
-            : `<p class="text-light" style="font-style:italic;font-size:.85rem">Sin notas registradas.</p>`}
-        </div>`).join('')
-    : '<p class="empty-state">No hay sesiones registradas para este paciente.</p>';
+          <div class="sesion-actions">
+            ${s.recurrente_grupo && !s.completada ? `<button class="btn btn-sm btn-primary" onclick="marcarSesionCompleta(${s.id}, ${pacienteId})">✓ Completar</button>` : ''}
+            <button class="btn btn-sm btn-ghost" onclick="modalEditarSesion(${s.id}, ${pacienteId})">✏️</button>
+            <button class="btn btn-sm btn-danger" onclick="confirmarEliminarSesion(${s.id}, ${pacienteId})">🗑</button>
+          </div>
+        </div>
+        ${s.notas
+          ? `<p class="sesion-notas">${esc(s.notas)}</p>`
+          : `<p class="text-light" style="font-style:italic;font-size:.85rem">Sin notas registradas.</p>`}
+      </div>`;
+  }
+
+  // Construir HTML
+  let itemsHTML = '';
+
+  if (!sesiones.length) {
+    itemsHTML = '<p class="empty-state">No hay sesiones registradas para este paciente.</p>';
+  } else {
+    // Sesiones pasadas (más reciente primero — ya vienen así del servidor)
+    itemsHTML += pasadas.map(renderSesionItem).join('');
+
+    // Próxima sesión futura
+    if (proximaFutura) {
+      itemsHTML += `<div class="sesion-proxima-label">📅 Próxima sesión</div>`;
+      itemsHTML += renderSesionItem(proximaFutura);
+    }
+
+    // Sesiones futuras ocultas
+    if (futurasOcultas.length) {
+      itemsHTML += `
+        <div class="sesion-futuras-ocultas" id="futuras-ocultas-${pacienteId}">
+          <button class="btn btn-ghost btn-sm sesion-ver-futuras"
+            onclick="toggleFuturas(${pacienteId})">
+            Ver ${futurasOcultas.length} sesión${futurasOcultas.length > 1 ? 'es' : ''} futura${futurasOcultas.length > 1 ? 's' : ''} pendiente${futurasOcultas.length > 1 ? 's' : ''} ▾
+          </button>
+          <div id="futuras-lista-${pacienteId}" style="display:none">
+            ${futurasOcultas.map(renderSesionItem).join('')}
+          </div>
+        </div>`;
+    }
+  }
 
   return `
     <div class="card">
@@ -606,7 +668,21 @@ async function renderSesionesTab(pacienteId) {
     </div>`;
 }
 
-// ─── MODAL: IMPORTAR HISTORIAL CLÍNICO ───────────────────────────────────────
+function toggleFuturas(pacienteId) {
+  const lista = document.getElementById('futuras-lista-' + pacienteId);
+  const btn   = document.querySelector('#futuras-ocultas-' + pacienteId + ' .sesion-ver-futuras');
+  if (!lista) return;
+  const visible = lista.style.display !== 'none';
+  lista.style.display = visible ? 'none' : '';
+  if (btn) {
+    const n = lista.querySelectorAll('.sesion-item').length;
+    btn.textContent = visible
+      ? `Ver ${n} sesión${n>1?'es':''} futura${n>1?'s':''} pendiente${n>1?'s':''} ▾`
+      : `Ocultar sesiones futuras ▲`;
+  }
+}
+
+
 function modalImportarHistorial(pacienteId) {
   const anioActual = new Date().getFullYear();
   openModal('Importar historial clínico', `
@@ -779,7 +855,12 @@ function _formPaciente(p = {}) {
         <input id="f-tel" class="form-input" type="text" value="${esc(p.telefono||'')}" placeholder="Ej: 11-4567-8901">
       </div>
       <div class="form-group">
-        <label class="form-label">Obra Social</label>
+        <label class="form-label">Email</label>
+        <input id="f-email" class="form-input" type="email" value="${esc(p.email||'')}" placeholder="Ej: paciente@gmail.com">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Obra Social</label>
         <select id="f-os" class="form-select" onchange="toggleValorHora(this.value)">
           <option value="">– Sin especificar –</option>
           <option value="Particular" ${selOS('Particular')}>Particular</option>
@@ -978,6 +1059,7 @@ function _collectPaciente() {
     dni:               document.getElementById('f-dni').value.trim()          || null,
     edad:              parseInt(document.getElementById('f-edad').value) || null,
     telefono:          document.getElementById('f-tel').value.trim()          || null,
+    email:             document.getElementById('f-email')?.value.trim()        || null,
     obra_social:       obra_social                                             || null,
     valor_hora:        !isNaN(valorHoraVal) && valorHoraVal > 0 ? valorHoraVal: null,
     diagnostico:       document.getElementById('f-dx').value.trim()           || null,
@@ -1021,6 +1103,48 @@ function modalEditarPaciente() {
   });
 }
 
+function _opcionesCalendario() {
+  const opcionesSemanas = [4,6,8,10,12,16,20,24].map(function(n) {
+    return '<option value="' + n + '">' + n + ' sesiones</option>';
+  }).join('');
+
+  return '<div class="form-section-title">Opciones de calendario</div>'
+    + '<div class="form-group">'
+    + '<label class="form-label">Tipo de evento</label>'
+    + '<div class="tipo-sesion-group">'
+    + '<label class="tipo-sesion-option">'
+    + '<input type="radio" name="tipo-cal" value="normal" checked>'
+    + '<span>&#128197; Calendario normal</span>'
+    + '</label>'
+    + '<label class="tipo-sesion-option">'
+    + '<input type="radio" name="tipo-cal" value="meet">'
+    + '<span>&#127909;&#65039; Google Meet</span>'
+    + '</label>'
+    + '</div></div>'
+    + '<div class="form-group">'
+    + '<label class="form-label">Recurrencia</label>'
+    + '<div class="tipo-sesion-group">'
+    + '<label class="tipo-sesion-option">'
+    + '<input type="radio" name="recurrencia" value="1" checked onclick="toggleSemanas(false)">'
+    + '<span>Una sola vez</span>'
+    + '</label>'
+    + '<label class="tipo-sesion-option">'
+    + '<input type="radio" name="recurrencia" value="custom" onclick="toggleSemanas(true)">'
+    + '<span>Recurrente</span>'
+    + '</label>'
+    + '</div>'
+    + '<div id="semanas-container" style="display:none;margin-top:.5rem">'
+    + '<label class="form-label">Cantidad de repeticiones</label>'
+    + '<select id="f-semanas" class="form-select">' + opcionesSemanas + '</select>'
+    + '</div>'
+    + '</div>';
+}
+
+function toggleSemanas(show) {
+  const el = document.getElementById('semanas-container');
+  if (el) el.style.display = show ? '' : 'none';
+}
+
 function modalNuevaSesion(pacienteId) {
   openModal('Nueva sesión', `
     <div class="form-row">
@@ -1041,43 +1165,81 @@ function modalNuevaSesion(pacienteId) {
       <div class="form-group">
         <label class="form-label">Tipo de sesión</label>
         <div class="tipo-sesion-group">
-          ${['individual','vincular','familiar','equipo'].map(t => `
-            <label class="tipo-sesion-option">
-              <input type="radio" name="tipo_sesion" value="${t}" ${t==='individual'?'checked':''}>
-              <span>${t.charAt(0).toUpperCase()+t.slice(1)}</span>
-            </label>`).join('')}
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="individual" checked><span>Individual</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="vincular"><span>Vincular</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="familiar"><span>Familiar</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="equipo"><span>Equipo</span></label>
         </div>
       </div>
     </div>
     <div class="form-group">
       <label class="form-label">Notas de sesión</label>
-      <textarea id="f-notas" class="form-textarea" rows="6"
+      <textarea id="f-notas" class="form-textarea" rows="4"
         placeholder="Temas tratados, observaciones, evolución..."></textarea>
     </div>
-    <p class="text-light" style="font-size:.82rem;margin-top:.25rem">
-      💡 Al guardar se generará automáticamente un pago pendiente (salvo La Casita).
-    </p>`,
+    ${_opcionesCalendario()}`,
   async () => {
     const fecha = document.getElementById('f-fecha').value;
     const hora  = document.getElementById('f-hora').value;
     if (!fecha) throw new Error('La fecha es obligatoria.');
     if (!hora)  throw new Error('La hora es obligatoria.');
-    const tipoSel = document.querySelector('input[name="tipo_sesion"]:checked');
+    const tipoSel     = document.querySelector('input[name="tipo_sesion"]:checked');
+    const tipoCal     = document.querySelector('input[name="tipo-cal"]:checked')?.value;
+    const recurrencia = document.querySelector('input[name="recurrencia"]:checked')?.value;
+    const semanas     = recurrencia === 'custom'
+      ? parseInt(document.getElementById('f-semanas').value) : 1;
     const result = await api('POST', '/sesiones', {
       paciente_id: pacienteId, fecha, hora,
-      duracion_minutos: parseInt(document.getElementById('f-dur').value) || 45,
-      tipo_sesion:      tipoSel ? tipoSel.value : 'individual',
-      notas:            document.getElementById('f-notas').value.trim() || null,
+      duracion_minutos:    parseInt(document.getElementById('f-dur').value) || 45,
+      tipo_sesion:         tipoSel ? tipoSel.value : 'individual',
+      notas:               document.getElementById('f-notas').value.trim() || null,
+      con_meet:            tipoCal === 'meet',
+      semanas_recurrencia: semanas,
     });
     closeModal();
-    let msg = 'Sesión registrada ✓';
-    if (result.pago?.credito_usado) msg += ` · Crédito usado: ${fmtMoney(result.pago.credito_usado)}`;
-    else if (result.pago?.monto > 0) msg += ` · Pago de ${fmtMoney(result.pago.monto)} generado`;
-    if (result.gcal) msg += ' · 📅 Google Calendar';
+    let msg = semanas > 1
+      ? `${result.totalCreadas} sesiones registradas ✓`
+      : 'Sesión registrada ✓';
+    if (result.pago?.credito_usado) msg += ` · Crédito: ${fmtMoney(result.pago.credito_usado)}`;
+    else if (result.pago?.monto > 0) msg += ` · Pago ${fmtMoney(result.pago.monto)}`;
+    if (result.meetLink) msg += ' · 🎥 Meet creado';
+    else if (result.gcal) msg += ' · 📅 Google Calendar';
     showToast(msg);
     renderFicha(pacienteId, 'sesiones');
   });
 }
+
+function marcarSesionCompleta(sesionId, pacienteId) {
+  const s = cache.sesiones.find(x => x.id === sesionId);
+  const _fechaStr = s ? fmtDate(s.fecha) : '';
+  const _notasStr = esc(s?.notas||'');
+  const _meetInfo = (s?.recurrente_grupo && s?.meet_link)
+    ? '<p class="text-light" style="font-size:.83rem;margin-top:.5rem">🎥 Si la paciente tiene email, se le enviará la invitación de Meet para la <strong>próxima sesión</strong>.</p>'
+    : '';
+  openModal('Completar sesión',
+    '<p>Marcá la sesión del <strong>' + _fechaStr + '</strong> como completada.</p>'
+    + '<div class="form-group" style="margin-top:.75rem">'
+    + '<label class="form-label">Notas de sesión (opcional)</label>'
+    + '<textarea id="f-notas-completa" class="form-textarea" rows="6" placeholder="Temas tratados, observaciones, evolución...">' + _notasStr + '</textarea>'
+    + '</div>'
+    + _meetInfo,
+  async () => {
+    const notas = document.getElementById('f-notas-completa').value.trim() || null;
+    const res = await fetch(`/api/sesiones/${sesionId}/completar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notas }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    closeModal();
+    let msg = 'Sesión completada ✓';
+    if (data.siguienteEnviada) msg += ' · 📧 Meet enviado para la próxima sesión';
+    showToast(msg);
+    renderFicha(pacienteId, 'sesiones');
+  }, 'Marcar como completada');
+}
+
 
 function modalEditarSesion(sesionId, pacienteId) {
   const s = cache.sesiones.find(x => x.id === sesionId);
@@ -1101,11 +1263,10 @@ function modalEditarSesion(sesionId, pacienteId) {
       <div class="form-group">
         <label class="form-label">Tipo de sesión</label>
         <div class="tipo-sesion-group">
-          ${['individual','vincular','familiar','equipo'].map(t => `
-            <label class="tipo-sesion-option">
-              <input type="radio" name="tipo_sesion" value="${t}" ${(s.tipo_sesion||'individual')===t?'checked':''}>
-              <span>${t.charAt(0).toUpperCase()+t.slice(1)}</span>
-            </label>`).join('')}
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="individual" ${selTipo(s,'individual')}><span>Individual</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="vincular" ${selTipo(s,'vincular')}><span>Vincular</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="familiar" ${selTipo(s,'familiar')}><span>Familiar</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="equipo" ${selTipo(s,'equipo')}><span>Equipo</span></label>
         </div>
       </div>
     </div>
@@ -1716,22 +1877,19 @@ async function modalNuevaSesionCalendario(fechaPreset) {
       <div class="form-group">
         <label class="form-label">Tipo de sesión</label>
         <div class="tipo-sesion-group">
-          ${['individual','vincular','familiar','equipo'].map(t => `
-            <label class="tipo-sesion-option">
-              <input type="radio" name="tipo_sesion" value="${t}" ${t==='individual'?'checked':''}>
-              <span>${t.charAt(0).toUpperCase()+t.slice(1)}</span>
-            </label>`).join('')}
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="individual" checked><span>Individual</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="vincular"><span>Vincular</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="familiar"><span>Familiar</span></label>
+          <label class="tipo-sesion-option"><input type="radio" name="tipo_sesion" value="equipo"><span>Equipo</span></label>
         </div>
       </div>
     </div>
     <div class="form-group">
       <label class="form-label">Notas de sesión</label>
-      <textarea id="f-notas" class="form-textarea" rows="5"
+      <textarea id="f-notas" class="form-textarea" rows="4"
         placeholder="Temas tratados, observaciones, evolución..."></textarea>
     </div>
-    <p class="text-light" style="font-size:.82rem">
-      💡 Se generará pago pendiente automáticamente (salvo La Casita) y se agregará a Google Calendar si está conectado.
-    </p>`,
+    ${_opcionesCalendario()}`,
   async () => {
     const pacienteId = document.getElementById('f-paciente-cal').value;
     const fecha      = document.getElementById('f-fecha').value;
@@ -1739,19 +1897,26 @@ async function modalNuevaSesionCalendario(fechaPreset) {
     if (!pacienteId) throw new Error('Seleccioná una paciente.');
     if (!fecha)      throw new Error('La fecha es obligatoria.');
     if (!hora)       throw new Error('La hora es obligatoria.');
-    const tipoSel = document.querySelector('input[name="tipo_sesion"]:checked');
+    const tipoSel     = document.querySelector('input[name="tipo_sesion"]:checked');
+    const tipoCal     = document.querySelector('input[name="tipo-cal"]:checked')?.value;
+    const recurrencia = document.querySelector('input[name="recurrencia"]:checked')?.value;
+    const semanas     = recurrencia === 'custom'
+      ? parseInt(document.getElementById('f-semanas').value) : 1;
     const result = await api('POST', '/sesiones', {
       paciente_id:      parseInt(pacienteId),
       fecha, hora,
-      duracion_minutos: parseInt(document.getElementById('f-dur').value) || 45,
-      tipo_sesion:      tipoSel ? tipoSel.value : 'individual',
-      notas:            document.getElementById('f-notas').value.trim() || null,
+      duracion_minutos:    parseInt(document.getElementById('f-dur').value) || 45,
+      tipo_sesion:         tipoSel ? tipoSel.value : 'individual',
+      notas:               document.getElementById('f-notas').value.trim() || null,
+      con_meet:            tipoCal === 'meet',
+      semanas_recurrencia: semanas,
     });
     closeModal();
-    let msg = 'Sesión registrada ✓';
-    if (result.pago?.credito_usado) msg += ` · Crédito usado: ${fmtMoney(result.pago.credito_usado)}`;
-    else if (result.pago?.monto > 0) msg += ` · Pago de ${fmtMoney(result.pago.monto)} generado`;
-    if (result.gcal) msg += ' · 📅 Google Calendar';
+    let msg = semanas > 1 ? `${result.totalCreadas} sesiones registradas ✓` : 'Sesión registrada ✓';
+    if (result.pago?.credito_usado) msg += ` · Crédito: ${fmtMoney(result.pago.credito_usado)}`;
+    else if (result.pago?.monto > 0) msg += ` · Pago ${fmtMoney(result.pago.monto)}`;
+    if (result.meetLink) msg += ' · 🎥 Meet creado';
+    else if (result.gcal) msg += ' · 📅 Google Calendar';
     showToast(msg);
     // Actualizar el mes/año según la fecha de la sesión creada y recargar
     const [y, m] = fecha.split('-');

@@ -74,6 +74,9 @@ db.exec(`
     tipo_sesion       TEXT DEFAULT 'individual',
     notas             TEXT,
     gcal_event_id     TEXT,
+    meet_link         TEXT,
+    completada        INTEGER DEFAULT 0,
+    recurrente_grupo  TEXT,
     created_at        TEXT DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
   );
@@ -134,6 +137,7 @@ const nuevasPacientes = [
   ['contacto_emergencia_tel',    'TEXT'],
   ['antecedentes',               'TEXT'],
   ['objetivos',                  'TEXT'],
+  ['email',                      'TEXT'],
 ];
 for (const [col, type] of nuevasPacientes) {
   if (!colsPacientes.includes(col)) {
@@ -152,6 +156,15 @@ if (!colsSesiones.includes('gcal_event_id')) {
 }
 if (!colsSesiones.includes('tipo_sesion')) {
   db.exec(`ALTER TABLE sesiones ADD COLUMN tipo_sesion TEXT DEFAULT 'individual'`);
+}
+if (!colsSesiones.includes('meet_link')) {
+  db.exec(`ALTER TABLE sesiones ADD COLUMN meet_link TEXT`);
+}
+if (!colsSesiones.includes('completada')) {
+  db.exec(`ALTER TABLE sesiones ADD COLUMN completada INTEGER DEFAULT 0`);
+}
+if (!colsSesiones.includes('recurrente_grupo')) {
+  db.exec(`ALTER TABLE sesiones ADD COLUMN recurrente_grupo TEXT`);
 }
 
 module.exports = db;
