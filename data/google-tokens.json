@@ -1,7 +1,0 @@
-{
-  "access_token": "ya29.a0AQvPyIModTZKjVSJQp0m6QvhwMTRG6hAGmUPycacW_7TtXEg5HQEqzIhamut9jtSN6Bt06VIcp6_PqwwdzyR-rMxxhMAKdq5ZHNYd7prmsqEhCMWAy6NYbonCbgJZcveSytwQXO8_ezb_xNXEf-0X8zrSzoiBPQHD13NhQdJqv2ft-p_JnOWM2xwg5spoWHBK-bJPmr5aCgYKAc0SARMSFQHGX2MiMRemG6aLhuvcAqoxwl09Vg0207",
-  "refresh_token": "1//0hNXqmK5S4SV-CgYIARAAGBESNwF-L9IrSGXD7zOwnybaThdq1rlnAl-dchvCGuIzioVy4Xr5WFBAroA3XAwmxBApoW0awFPgZAI",
-  "scope": "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file",
-  "token_type": "Bearer",
-  "expiry_date": 1780067619280
-}
