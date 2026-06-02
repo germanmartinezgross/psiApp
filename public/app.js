@@ -1240,6 +1240,7 @@ function marcarSesionCompleta(sesionId, pacienteId) {
   }, 'Marcar como completada');
 }
 
+function selTipo(s, v) { return (s.tipo_sesion||'individual') === v ? 'checked' : ''; }
 
 function modalEditarSesion(sesionId, pacienteId) {
   const s = cache.sesiones.find(x => x.id === sesionId);
