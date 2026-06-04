@@ -10,6 +10,21 @@ const app    = express();
 const PORT   = 3000;
 const upload = multer({ dest: os.tmpdir() });
 
+// ─── FECHA LOCAL (evita desvío UTC en Argentina UTC-3) ────────────────────────
+/** Retorna la fecha local como string YYYY-MM-DD, sin usar toISOString() */
+function localDateStr(date) {
+  const d = date || new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+/** Retorna el mes local como YYYY-MM */
+function localMonthStr(date) {
+  const d = date || new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -165,10 +180,23 @@ async function syncGcalEvento({ gcalEventId, paciente, fecha, hora, duracion_min
       const [h, m]  = hora.split(':').map(Number);
       const durMin  = duracion_minutos || 45;
       const endMin  = h * 60 + m + durMin;
-      const endH    = String(Math.floor(endMin / 60) % 24).padStart(2, '0');
-      const endM    = String(endMin % 60).padStart(2, '0');
-      startObj = { dateTime: `${fecha}T${hora}:00`, timeZone: tz };
-      endObj   = { dateTime: `${fecha}T${endH}:${endM}:00`, timeZone: tz };
+      if (endMin >= 24 * 60) {
+        // La sesión cruza medianoche: el fin cae al día siguiente
+        const [fy, fm, fd] = fecha.split('-').map(Number);
+        const nextDay = new Date(fy, fm - 1, fd + 1);
+        const nextDateStr = nextDay.getFullYear() + '-'
+          + String(nextDay.getMonth()+1).padStart(2,'0') + '-'
+          + String(nextDay.getDate()).padStart(2,'0');
+        const endH = String(Math.floor(endMin / 60) % 24).padStart(2, '0');
+        const endM = String(endMin % 60).padStart(2, '0');
+        startObj = { dateTime: `${fecha}T${hora}:00`, timeZone: tz };
+        endObj   = { dateTime: `${nextDateStr}T${endH}:${endM}:00`, timeZone: tz };
+      } else {
+        const endH = String(Math.floor(endMin / 60)).padStart(2, '0');
+        const endM = String(endMin % 60).padStart(2, '0');
+        startObj = { dateTime: `${fecha}T${hora}:00`, timeZone: tz };
+        endObj   = { dateTime: `${fecha}T${endH}:${endM}:00`, timeZone: tz };
+      }
     } else {
       startObj = { date: fecha };
       endObj   = { date: fecha };
@@ -259,6 +287,8 @@ app.post('/api/sesiones', async (req, res) => {
     return res.status(400).json({ error: 'paciente_id y fecha son requeridos' });
 
   const paciente = db.prepare('SELECT nombre, apellido, obra_social, valor_hora, email, frecuencia FROM pacientes WHERE id=?').get(paciente_id);
+  if (!paciente)
+    return res.status(404).json({ error: 'Paciente no encontrado' });
   const conMeet  = !!con_meet;
   const cantidad = parseInt(semanas_recurrencia) || 1; // cantidad de ocurrencias
 
@@ -488,7 +518,7 @@ app.post('/api/pacientes/:id/registrar-pago', (req, res) => {
   if (!monto || monto <= 0) return res.status(400).json({ error: 'Monto inválido' });
 
   const pacienteId = req.params.id;
-  const fechaPago  = fecha || new Date().toISOString().split('T')[0];
+  const fechaPago  = fecha || localDateStr();
   const metodoPago = metodo || 'transferencia';
   const monedaPago = moneda || 'pesos';
 
@@ -574,7 +604,7 @@ app.put('/api/config/:clave', (req, res) => {
 // ─── ESTADÍSTICAS ────────────────────────────────────────────────────────────
 
 app.get('/api/stats', (req, res) => {
-  const mesActual = new Date().toISOString().slice(0, 7);
+  const mesActual = localMonthStr(); // YYYY-MM en hora local
 
   const totalPacientes = db.prepare(
     `SELECT COUNT(*) AS n FROM pacientes WHERE activo=1`
@@ -624,7 +654,7 @@ app.get('/api/stats', (req, res) => {
     SELECT COUNT(*) AS n FROM pacientes
     WHERE activo=1 AND obra_social='Particular'
     AND (updated_at < ? OR updated_at IS NULL)
-  `).get(hace3meses.toISOString().split('T')[0]).n;
+  `).get(localDateStr(hace3meses)).n;
 
   const notasDashboard = db.prepare(`SELECT valor FROM configuracion WHERE clave='notas_dashboard'`).get()?.valor || '';
 
@@ -689,7 +719,7 @@ function generarExcelBuffer() {
 // Descarga local
 app.get('/api/export', (req, res) => {
   const buf   = generarExcelBuffer();
-  const fecha = new Date().toISOString().slice(0, 10);
+  const fecha = localDateStr();
   res.setHeader('Content-Disposition', `attachment; filename=psiapp-export-${fecha}.xlsx`);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buf);
@@ -702,6 +732,286 @@ let gauth = null;
 try { gauth = require('./google-auth'); } catch (e) {
   console.log('ℹ️  google-auth no disponible (falta googleapis o google-credentials.json)');
 }
+
+// ─── CARPETA RAÍZ EN DRIVE ────────────────────────────────────────────────────
+// ID de la carpeta PsiApp-DB en Drive (se cachea en memoria para no buscarla en cada operación)
+let _psiAppFolderId = null;
+
+/**
+ * Busca o crea la carpeta "PsiApp-DB" en la raíz de Drive.
+ * Retorna el ID de la carpeta, o null si Drive no está disponible.
+ */
+async function getOrCreatePsiAppFolder(drive) {
+  if (_psiAppFolderId) return _psiAppFolderId;
+
+  // Buscar si ya existe
+  const search = await drive.files.list({
+    q: `name='PsiApp-DB' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    fields: 'files(id, name)',
+    spaces: 'drive',
+  });
+
+  if (search.data.files && search.data.files.length > 0) {
+    _psiAppFolderId = search.data.files[0].id;
+    return _psiAppFolderId;
+  }
+
+  // Crear si no existe
+  const created = await drive.files.create({
+    requestBody: {
+      name: 'PsiApp-DB',
+      mimeType: 'application/vnd.google-apps.folder',
+    },
+    fields: 'id',
+  });
+  _psiAppFolderId = created.data.id;
+  return _psiAppFolderId;
+}
+
+/**
+ * Crea una subcarpeta dentro de PsiApp-DB con el nombre dado.
+ * Retorna el ID de la subcarpeta.
+ */
+async function crearSubcarpetaDrive(drive, nombre) {
+  const parentId = await getOrCreatePsiAppFolder(drive);
+  const created  = await drive.files.create({
+    requestBody: {
+      name: nombre,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+    },
+    fields: 'id, webViewLink',
+  });
+  return { id: created.data.id, link: created.data.webViewLink };
+}
+
+// ─── SYNC DE BASE DE DATOS CON DRIVE ─────────────────────────────────────────
+
+/** Último resultado de la comparación al iniciar (expuesto vía API al frontend) */
+let _dbSyncStatus = {
+  chequeado:   false,   // si ya se comparó con Drive al iniciar
+  driveEsNewer: false,  // si Drive tiene una versión más nueva
+  driveFileId:  null,   // ID del archivo en Drive
+  driveModified: null,  // fecha de modificación en Drive (ISO string)
+  localModified: null,  // fecha de modificación local (ISO string)
+  ultimoSync:   null,   // fecha del último upload exitoso (ISO string)
+  syncEnCurso:  false,  // para evitar subidas simultáneas
+};
+
+/**
+ * Construye un cliente de Drive autenticado.
+ * Retorna null si Drive no está disponible.
+ */
+function _buildDriveClient() {
+  if (!gauth) return null;
+  const client = gauth.createClient();
+  const tokens = gauth.getTokens();
+  if (!client || !tokens) return null;
+  const { google } = require('googleapis');
+  client.setCredentials(tokens);
+  client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
+  return google.drive({ version: 'v3', auth: client });
+}
+
+/**
+ * Sube pacientes.db a la carpeta PsiApp-DB en Drive.
+ * Hace checkpoint WAL antes de subir para garantizar consistencia.
+ * Retorna true si tuvo éxito, false si falló.
+ */
+async function subirDBaDrive() {
+  if (_dbSyncStatus.syncEnCurso) return false;
+  const drive = _buildDriveClient();
+  if (!drive) return false;
+
+  _dbSyncStatus.syncEnCurso = true;
+  try {
+    const { Readable } = require('stream');
+    const dbPath = path.join(__dirname, 'data', 'pacientes.db');
+
+    // Checkpoint WAL: vuelca todos los cambios pendientes al archivo principal
+    // antes de leerlo para subir, garantizando consistencia del backup
+    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (_) {}
+
+    // Tocar la fecha de modificación local ANTES de leer el buffer,
+    // para que el timestamp local y el de Drive queden alineados
+    const ahora = new Date();
+    try { fs.utimesSync(dbPath, ahora, ahora); } catch (_) {}
+
+    const folderId = await getOrCreatePsiAppFolder(drive);
+
+    // Leer el archivo DESPUÉS del checkpoint y del utimes
+    const buffer = fs.readFileSync(dbPath);
+
+    // Buscar si ya existe el archivo en Drive para actualizarlo (no crear uno nuevo cada vez)
+    let fileId = _dbSyncStatus.driveFileId;
+    if (!fileId) {
+      const search = await drive.files.list({
+        q: `name='pacientes.db' and '${folderId}' in parents and trashed=false`,
+        fields: 'files(id)',
+      });
+      fileId = search.data.files?.[0]?.id || null;
+    }
+
+    if (fileId) {
+      // Actualizar archivo existente
+      await drive.files.update({
+        fileId,
+        media: { mimeType: 'application/octet-stream', body: Readable.from(buffer) },
+      });
+      _dbSyncStatus.driveFileId = fileId;
+    } else {
+      // Crear archivo nuevo
+      const r = await drive.files.create({
+        requestBody: { name: 'pacientes.db', parents: [folderId] },
+        media: { mimeType: 'application/octet-stream', body: Readable.from(buffer) },
+        fields: 'id',
+      });
+      _dbSyncStatus.driveFileId = r.data.id;
+    }
+
+    _dbSyncStatus.ultimoSync    = ahora.toISOString();
+    _dbSyncStatus.localModified = ahora.toISOString();
+    console.log('✅ DB sincronizada con Drive:', ahora.toLocaleString('es-AR'));
+    return true;
+  } catch (err) {
+    console.warn('⚠️  Error al sincronizar DB con Drive:', err.message);
+    return false;
+  } finally {
+    _dbSyncStatus.syncEnCurso = false;
+  }
+}
+
+/**
+ * Al iniciar el servidor, compara la fecha de la DB local con la de Drive.
+ * Guarda el resultado en _dbSyncStatus para que el frontend lo consulte.
+ */
+async function verificarDBenDrive() {
+  const drive = _buildDriveClient();
+  if (!drive) {
+    _dbSyncStatus.chequeado = true;
+    return;
+  }
+  try {
+    const dbPath   = path.join(__dirname, 'data', 'pacientes.db');
+    const folderId = await getOrCreatePsiAppFolder(drive);
+
+    const search = await drive.files.list({
+      q: `name='pacientes.db' and '${folderId}' in parents and trashed=false`,
+      fields: 'files(id, modifiedTime)',
+      orderBy: 'modifiedTime desc',
+    });
+
+    const driveFile = search.data.files?.[0] || null;
+
+    if (!driveFile) {
+      // No hay DB en Drive todavía — subir la local
+      console.log('ℹ️  No hay DB en Drive. Subiendo versión local...');
+      _dbSyncStatus.chequeado = true;
+      await subirDBaDrive();
+      return;
+    }
+
+    _dbSyncStatus.driveFileId   = driveFile.id;
+    _dbSyncStatus.driveModified = driveFile.modifiedTime;
+
+    // Fecha de modificación local
+    let localModified = null;
+    if (fs.existsSync(dbPath)) {
+      localModified = fs.statSync(dbPath).mtime.toISOString();
+      _dbSyncStatus.localModified = localModified;
+    }
+
+    const driveDate = new Date(driveFile.modifiedTime);
+    const localDate = localModified ? new Date(localModified) : new Date(0);
+
+    // Drive es más nueva si su fecha supera en más de 60 segundos a la local
+    // (margen para evitar falsos positivos por diferencias de reloj)
+    _dbSyncStatus.driveEsNewer = driveDate - localDate > 60 * 1000;
+
+    if (_dbSyncStatus.driveEsNewer) {
+      console.log('ℹ️  Drive tiene una DB más reciente. Esperando decisión del usuario...');
+    } else {
+      console.log('✅ DB local está actualizada.');
+    }
+  } catch (err) {
+    console.warn('⚠️  Error al verificar DB en Drive:', err.message);
+  } finally {
+    _dbSyncStatus.chequeado = true;
+  }
+}
+
+// ─── SYNC PERIÓDICO CADA 30 MINUTOS ──────────────────────────────────────────
+setInterval(async () => {
+  if (gauth && gauth.getTokens()) {
+    await subirDBaDrive();
+  }
+}, 30 * 60 * 1000); // 30 minutos
+
+// Ejecutar verificación inicial al arrancar (no bloquea el inicio del servidor)
+verificarDBenDrive().catch(err => console.warn('verificarDBenDrive error:', err.message));
+
+// ─── ENDPOINTS DE SYNC DE BASE DE DATOS ──────────────────────────────────────
+
+/** Estado de la comparación inicial de DB (el frontend lo consulta al cargar) */
+app.get('/api/db/sync-status', (req, res) => {
+  res.json(_dbSyncStatus);
+});
+
+/** El usuario eligió usar la versión de Drive: descargar y reemplazar la DB local */
+app.post('/api/db/usar-drive', async (req, res) => {
+  const drive = _buildDriveClient();
+  if (!drive) return res.status(500).json({ error: 'Drive no disponible' });
+  if (!_dbSyncStatus.driveFileId) return res.status(400).json({ error: 'No hay archivo en Drive' });
+
+  try {
+    const dbPath = path.join(__dirname, 'data', 'pacientes.db');
+    const dbWal  = dbPath + '-wal';
+    const dbShm  = dbPath + '-shm';
+
+    // Descargar el archivo desde Drive
+    const driveResp = await drive.files.get(
+      { fileId: _dbSyncStatus.driveFileId, alt: 'media' },
+      { responseType: 'arraybuffer' }
+    );
+    const buffer = Buffer.from(driveResp.data);
+
+    // Checkpoint WAL para vaciar cambios pendientes al archivo principal
+    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (_) {}
+
+    // En Windows, los archivos WAL/SHM no se pueden borrar con unlink mientras
+    // SQLite los tiene bloqueados. Usamos rename a un nombre temporal en su lugar,
+    // y si eso también falla simplemente los ignoramos — la nueva DB arranca limpia.
+    for (const f of [dbWal, dbShm]) {
+      if (!fs.existsSync(f)) continue;
+      try {
+        fs.renameSync(f, f + '.old');
+      } catch (_) {
+        // rename falló (raro en Windows) — intentar unlink como último recurso
+        try { fs.unlinkSync(f); } catch (_2) { /* ignorar — no es crítico */ }
+      }
+    }
+
+    // Reemplazar la DB local con la descargada
+    fs.writeFileSync(dbPath, buffer);
+
+    // Actualizar timestamp local para que coincida con el de Drive
+    const ahora = new Date();
+    try { fs.utimesSync(dbPath, ahora, ahora); } catch (_) {}
+
+    _dbSyncStatus.driveEsNewer  = false;
+    _dbSyncStatus.localModified = ahora.toISOString();
+    _dbSyncStatus.ultimoSync    = ahora.toISOString();
+
+    console.log('✅ DB local reemplazada con versión de Drive. Reiniciando servidor...');
+    res.json({ ok: true });
+
+    // Reiniciar el proceso para que Node recargue la DB desde el nuevo archivo
+    setTimeout(() => process.exit(0), 300);
+  } catch (err) {
+    console.error('Error al descargar DB de Drive:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /** Desconectar Google — borra los tokens locales */
 app.post('/api/google/disconnect', (req, res) => {
@@ -750,7 +1060,7 @@ app.get('/api/google/callback', async (req, res) => {
   }
 });
 
-/** Exporta el Excel y lo sube a Google Drive */
+/** Exporta el Excel y lo sube a Google Drive dentro de PsiApp-DB */
 app.get('/api/export-drive', async (req, res) => {
   if (!gauth) return res.status(500).json({ error: 'googleapis no está instalado. Corré npm install.' });
 
@@ -765,17 +1075,25 @@ app.get('/api/export-drive', async (req, res) => {
     const { Readable } = require('stream');
 
     client.setCredentials(tokens);
-    // Guarda el nuevo refresh_token si Google lo renueva
     client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
 
     const buf   = generarExcelBuffer();
-    const fecha = new Date().toISOString().slice(0, 10);
+    const fecha = localDateStr();
     const nombre = `psiapp-export-${fecha}.xlsx`;
 
     const drive = google.drive({ version: 'v3', auth: client });
+
+    // Crear subcarpeta "Excel - DD/MM/AAAA" dentro de PsiApp-DB
+    const [y, m, d] = fecha.split('-');
+    const nombreCarpeta = `Excel - ${d}/${m}/${y}`;
+    const subcarpeta = await crearSubcarpetaDrive(drive, nombreCarpeta);
+
     const resp  = await drive.files.create({
-      requestBody: { name: nombre,
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+      requestBody: {
+        name: nombre,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        parents: [subcarpeta.id],
+      },
       media: {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         body: Readable.from(buf),
@@ -788,7 +1106,6 @@ app.get('/api/export-drive', async (req, res) => {
   } catch (err) {
     console.error('Drive export error:', err.message);
     if (err.code === 401 || err.message?.includes('invalid_grant')) {
-      // Token expirado o revocado — borrar y pedir reautorización
       try { require('fs').unlinkSync(require('path').join(__dirname, 'google-tokens.json')); } catch (_) {}
       res.status(401).json({ estado: 'sin_autorizar', error: 'Sesión expirada. Reconectá Google Drive.' });
     } else {
@@ -804,7 +1121,7 @@ app.get('/api/calendar/events', async (req, res) => {
   const m = parseInt(req.query.month) || new Date().getMonth() + 1; // 1-indexed
 
   const startDate = `${y}-${String(m).padStart(2,'0')}-01`;
-  const endDate   = new Date(y, m, 0).toISOString().split('T')[0];
+  const endDate   = localDateStr(new Date(y, m, 0));
 
   // Sesiones PsiApp para el mes (siempre disponibles)
   // Excluimos las que ya tienen gcal_event_id porque aparecerán como eventos de Google
@@ -1001,6 +1318,7 @@ app.post('/api/import-excel', upload.single('archivo'), (req, res) => {
           const vals = [
             nombre, apellido,
             row.dni||null, safeDate(row.fecha_nacimiento), row.telefono||null,
+            row.email||null,
             row.obra_social||null, row.valor_hora||null,
             row.diagnostico||null, row.imc||null,
             row.conductas_actuales||null, row.frecuencia||null, row.medicacion||null,
@@ -1009,17 +1327,26 @@ app.post('/api/import-excel', upload.single('archivo'), (req, res) => {
             row.nombre_padre||null, row.tel_padre||null,
             row.nombre_madre||null, row.tel_madre||null,
             row.motivo_consulta||null, row.notas_generales||null,
+            row.antecedentes||null, row.objetivos||null,
+            row.edad ? parseInt(row.edad) : null,
+            row.contacto_emergencia_nombre||null, row.contacto_emergencia_tel||null,
+            row.red_familiar||null,
           ];
           if (existe) {
             db.prepare(`
               UPDATE pacientes SET
                 nombre=?, apellido=?, dni=?, fecha_nacimiento=?, telefono=?,
+                email=?,
                 obra_social=?, valor_hora=?, diagnostico=?, imc=?,
                 conductas_actuales=?, frecuencia=?, medicacion=?,
                 estado_tto=?, fecha_inicio_tto=?,
                 medica_clinica=?, psiquiatra=?, nutricionista=?,
                 nombre_padre=?, tel_padre=?, nombre_madre=?, tel_madre=?,
                 motivo_consulta=?, notas_generales=?,
+                antecedentes=?, objetivos=?,
+                edad=?,
+                contacto_emergencia_nombre=?, contacto_emergencia_tel=?,
+                red_familiar=?,
                 updated_at=datetime('now','localtime')
               WHERE id=?
             `).run(...vals, id);
@@ -1028,13 +1355,18 @@ app.post('/api/import-excel', upload.single('archivo'), (req, res) => {
             db.prepare(`
               INSERT INTO pacientes
                 (nombre, apellido, dni, fecha_nacimiento, telefono,
+                 email,
                  obra_social, valor_hora, diagnostico, imc,
                  conductas_actuales, frecuencia, medicacion,
                  estado_tto, fecha_inicio_tto,
                  medica_clinica, psiquiatra, nutricionista,
                  nombre_padre, tel_padre, nombre_madre, tel_madre,
-                 motivo_consulta, notas_generales)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 motivo_consulta, notas_generales,
+                 antecedentes, objetivos,
+                 edad,
+                 contacto_emergencia_nombre, contacto_emergencia_tel,
+                 red_familiar)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             `).run(...vals);
             stats.pacientes.insertados++;
           }
@@ -1338,13 +1670,26 @@ app.get('/api/pacientes/:id/export-historia-drive', async (req, res) => {
     client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
 
     const { buffer, nombre } = await generarHistoriaDocx(req.params.id);
-    const filename = `Historia Clinica - ${nombre}.docx`;
+    const filename  = `Historia Clinica - ${nombre}.docx`;
+    const fecha     = localDateStr();
+    const [y, m, d] = fecha.split('-');
+    const nombreCarpeta = `Historia - ${d}/${m}/${y}`;
+
     const drive = google.drive({ version: 'v3', auth: client });
-    const resp  = await drive.files.create({
-      requestBody: { name: filename,
-        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
-      media: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        body: Readable.from(buffer) },
+
+    // Crear subcarpeta "Historia - DD/MM/AAAA" dentro de PsiApp-DB
+    const subcarpeta = await crearSubcarpetaDrive(drive, nombreCarpeta);
+
+    const resp = await drive.files.create({
+      requestBody: {
+        name: filename,
+        parents: [subcarpeta.id],
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      },
+      media: {
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        body: Readable.from(buffer),
+      },
       fields: 'id,name,webViewLink',
     });
     res.json({ ok: true, nombre: resp.data.name, link: resp.data.webViewLink });
@@ -1411,7 +1756,7 @@ app.get('/api/export/completo', async (req, res) => {
   try {
     const archiver = require('archiver');
     const { archivos, excelBuf } = await generarExportCompleto();
-    const fecha = new Date().toISOString().slice(0, 10);
+    const fecha = localDateStr();
 
     res.setHeader('Content-Disposition', `attachment; filename="PsiApp-Completo-${fecha}.zip"`);
     res.setHeader('Content-Type', 'application/zip');
@@ -1441,29 +1786,34 @@ app.post('/api/export/completo-drive', async (req, res) => {
     client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
     const drive = google.drive({ version: 'v3', auth: client });
 
-    const fecha = new Date().toISOString().slice(0, 10);
+    const fecha = localDateStr();
+    const [y, m, d] = fecha.split('-');
+    const nombreCarpeta = `Completo - ${d}/${m}/${y}`;
+
     const { archivos, excelBuf } = await generarExportCompleto();
 
-    // Crear carpeta en Drive
-    const carpeta = await drive.files.create({
-      requestBody: { name: `PsiApp-Completo-${fecha}`, mimeType: 'application/vnd.google-apps.folder' },
-      fields: 'id,webViewLink',
-    });
-    const carpetaId = carpeta.data.id;
+    // Crear subcarpeta "Completo - DD/MM/AAAA" dentro de PsiApp-DB
+    const subcarpeta = await crearSubcarpetaDrive(drive, nombreCarpeta);
+    const carpetaId  = subcarpeta.id;
 
     // Subir cada Word y guardar su URL
     for (const a of archivos) {
       const resp = await drive.files.create({
-        requestBody: { name: a.filename, parents: [carpetaId],
-          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
-        media: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          body: Readable.from(a.buffer) },
+        requestBody: {
+          name: a.filename,
+          parents: [carpetaId],
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        },
+        media: {
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          body: Readable.from(a.buffer),
+        },
         fields: 'id,webViewLink',
       });
       a.driveLink = resp.data.webViewLink;
     }
 
-    // Regenerar Excel con hipervínculos reales a Drive (sobreescribir el anterior)
+    // Regenerar Excel con hipervínculos reales a Drive
     const XLSX2 = require('xlsx');
     const wb2   = XLSX2.utils.book_new();
     const filasDrive = archivos.map(a => ({
@@ -1478,15 +1828,20 @@ app.post('/api/export/completo-drive', async (req, res) => {
     XLSX2.utils.book_append_sheet(wb2, XLSX2.utils.json_to_sheet(filasDrive), 'Pacientes');
     const excelDriveBuf = XLSX2.write(wb2, { type: 'buffer', bookType: 'xlsx' });
 
-    // Subir Excel (con links reales)
+    // Subir Excel con links reales
     await drive.files.create({
-      requestBody: { name: `Pacientes-${fecha}.xlsx`, parents: [carpetaId],
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
-      media: { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        body: Readable.from(excelDriveBuf) },
+      requestBody: {
+        name: `Pacientes-${fecha}.xlsx`,
+        parents: [carpetaId],
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+      media: {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        body: Readable.from(excelDriveBuf),
+      },
     });
 
-    res.json({ ok: true, carpeta: carpeta.data.webViewLink, total: archivos.length });
+    res.json({ ok: true, carpeta: subcarpeta.link, total: archivos.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1497,7 +1852,7 @@ app.post('/api/export/completo-drive', async (req, res) => {
 app.get('/api/export/backup', (req, res) => {
   try {
     const archiver = require('archiver');
-    const fecha    = new Date().toISOString().slice(0, 10);
+    const fecha    = localDateStr();
     res.setHeader('Content-Disposition', `attachment; filename="PsiApp-Backup-${fecha}.zip"`);
     res.setHeader('Content-Type', 'application/zip');
     const archive = archiver('zip', { zlib: { level: 9 } });
@@ -1522,18 +1877,30 @@ app.post('/api/export/backup-drive', async (req, res) => {
     client.setCredentials(tokens);
     client.on('tokens', t => gauth.saveTokens({ ...tokens, ...t }));
 
-    // Generar el ZIP en memoria usando un PassThrough stream
+    // Checkpoint WAL antes de incluir la DB en el backup
+    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (_) {}
+
     const pass    = new PassThrough();
     const archive = archiver('zip', { zlib: { level: 9 } });
     archive.pipe(pass);
     archive.directory(path.join(__dirname, 'data'), 'data');
     archive.finalize();
 
-    const fecha    = new Date().toISOString().slice(0, 10);
-    const drive    = google.drive({ version: 'v3', auth: client });
-    const resp     = await drive.files.create({
-      requestBody: { name: `PsiApp-Backup-${fecha}.zip`,
-        mimeType: 'application/zip' },
+    const fecha    = localDateStr();
+    const [y, m, d] = fecha.split('-');
+    const nombreCarpeta = `Backup - ${d}/${m}/${y}`;
+
+    const drive = google.drive({ version: 'v3', auth: client });
+
+    // Crear subcarpeta "Backup - DD/MM/AAAA" dentro de PsiApp-DB
+    const subcarpeta = await crearSubcarpetaDrive(drive, nombreCarpeta);
+
+    const resp = await drive.files.create({
+      requestBody: {
+        name: `PsiApp-Backup-${fecha}.zip`,
+        mimeType: 'application/zip',
+        parents: [subcarpeta.id],
+      },
       media: { mimeType: 'application/zip', body: pass },
       fields: 'id,name,webViewLink',
     });
@@ -1545,10 +1912,12 @@ app.post('/api/export/backup-drive', async (req, res) => {
 
 // ─── CERRAR SERVIDOR ─────────────────────────────────────────────────────────
 
-app.post('/api/shutdown', (req, res) => {
+app.post('/api/shutdown', async (req, res) => {
   res.json({ ok: true });
-  console.log('\n🔴 PsiApp cerrada desde el navegador.\n');
-  setTimeout(() => process.exit(0), 300);
+  console.log('\n🔴 PsiApp cerrando — sincronizando DB con Drive...');
+  await subirDBaDrive().catch(() => {});
+  console.log('🔴 PsiApp cerrada desde el navegador.\n');
+  setTimeout(() => process.exit(0), 500);
 });
 
 // ─── INICIO ──────────────────────────────────────────────────────────────────

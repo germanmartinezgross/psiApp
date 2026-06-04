@@ -31,6 +31,25 @@ function esc(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// ─── SYNC LABEL NAVBAR ───────────────────────────────────────────────────────
+function actualizarSyncNavbar(status) {
+  const el = document.getElementById('sync-label');
+  if (!el) return;
+  if (!status || !status.chequeado) { el.textContent = ''; return; }
+  if (status.ultimoSync) {
+    const d = new Date(status.ultimoSync);
+    const hoy = new Date();
+    const esHoy = d.toDateString() === hoy.toDateString();
+    const hora  = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const label = esHoy ? 'hoy ' + hora : d.toLocaleDateString('es-AR') + ' ' + hora;
+    el.textContent = '\u2601\uFE0F ' + label;
+    el.title = 'Último sync con Drive: ' + label;
+  } else {
+    el.textContent = '\u2601\uFE0F sin sync';
+    el.title = 'Sin sincronización con Drive todavía';
+  }
+}
+
 function showToast(msg, type = 'success') {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
@@ -83,6 +102,8 @@ async function renderDashboard() {
   app.innerHTML = '<div class="loading-initial">Cargando...</div>';
   try {
     const s = await api('GET', '/stats');
+    const syncStatus = await fetch('/api/db/sync-status').then(r => r.json()).catch(() => ({}));
+    actualizarSyncNavbar(syncStatus);
 
     const proximasHTML = s.proximasSesiones.length
       ? s.proximasSesiones.map(x => `
@@ -311,9 +332,9 @@ function modalActualizarDesdeExcel() {
     // Construir mensaje detallado
     const { pacientes: p, sesiones: s, pagos: pg } = data;
     const lineas = [
-      `📋 Pacientes: ${p.actualizados} actualizados, ${p.insertados} nuevos${p.errores ? `, ${p.errores} con error` : ''}`,
-      `📅 Sesiones: ${s.actualizadas} actualizadas, ${s.insertadas} nuevas${s.errores ? `, ${s.errores} con error` : ''}`,
-      `💰 Pagos: ${pg.actualizados} actualizados, ${pg.insertados} nuevos${pg.errores ? `, ${pg.errores} con error` : ''}`,
+      '📋 Pacientes: ' + p.actualizados + ' actualizados, ' + p.insertados + ' nuevos' + (p.errores ? ', ' + p.errores + ' con error' : ''),
+      '📅 Sesiones: ' + s.actualizadas + ' actualizadas, ' + s.insertadas + ' nuevas' + (s.errores ? ', ' + s.errores + ' con error' : ''),
+      '💰 Pagos: ' + pg.actualizados + ' actualizados, ' + pg.insertados + ' nuevos' + (pg.errores ? ', ' + pg.errores + ' con error' : ''),
     ];
 
     // Modal de resultado (no toast, porque hay mucha info)
@@ -364,38 +385,37 @@ async function renderPacientes(buscar = '', obraSocial = _filtroObraSocial) {
     };
 
     const cardsHTML = list.length
-      ? list.map(p => `
-          <div class="paciente-card card">
-            <div class="paciente-avatar">${esc(p.nombre[0])}${esc(p.apellido[0])}</div>
-            <div class="paciente-info">
-              <h3>${esc(p.apellido)}, ${esc(p.nombre)}
-                ${p.motivo_baja ? `<span class="badge ${MOTIVO_BADGE[p.motivo_baja]||'badge-neutral'}" style="font-size:.7rem;margin-left:.3rem">${MOTIVO_LABEL[p.motivo_baja]||p.motivo_baja}</span>` : ''}
-              </h3>
-              <div class="paciente-meta">
-                ${p.dni        ? `<span>DNI: ${esc(p.dni)}</span>` : ''}
-                ${p.telefono   ? `<span>📞 ${esc(p.telefono)}</span>` : ''}
-                ${p.diagnostico? `<span class="badge badge-info">${esc(p.diagnostico)}</span>` : ''}
-                ${p.obra_social? `<span class="badge badge-neutral">${esc(p.obra_social)}</span>` : ''}
-                <span>📋 ${p.total_sesiones} sesión${p.total_sesiones !== 1 ? 'es' : ''}</span>
-                ${p.ultima_sesion ? `<span class="text-light">Última: ${fmtDate(p.ultima_sesion)}</span>` : ''}
-                ${p.pagos_pendientes > 0
-                  ? `<span class="badge badge-warning">⚠ ${fmtMoney(p.monto_pendiente)} pendiente</span>`
-                  : ''}
-                ${p.credito > 0 ? `<span class="badge badge-success">Crédito: ${fmtMoney(p.credito)}</span>` : ''}
-              </div>
-            </div>
-            <div style="display:flex;gap:.4rem;flex-shrink:0">
-              ${_filtroEstado === 'inactivo' ? `
-                <button class="btn btn-ghost btn-sm" onclick="reactivarPaciente(${p.id}, '${esc(p.nombre)}')">↩ Reactivar</button>
-                <button class="btn btn-danger btn-sm" onclick="eliminarPacienteDefinitivo(${p.id}, '${esc(p.nombre)} ${esc(p.apellido)}')">🗑 Eliminar</button>
-              ` : `
-                <a href="#/paciente/${p.id}" class="btn btn-primary btn-sm">Ver ficha →</a>
-              `}
-            </div>
-          </div>`).join('')
-      : `<div class="empty-state">
-           <p>No se encontraron pacientes con ese criterio.</p>
-         </div>`;
+      ? list.map(p => {
+          const motivoBadge = p.motivo_baja
+            ? '<span class="badge ' + (MOTIVO_BADGE[p.motivo_baja]||'badge-neutral') + '" style="font-size:.7rem;margin-left:.3rem">' + (MOTIVO_LABEL[p.motivo_baja]||esc(p.motivo_baja)) + '</span>'
+            : '';
+          const dniSpan        = p.dni         ? '<span>DNI: ' + esc(p.dni) + '</span>' : '';
+          const telSpan        = p.telefono    ? '<span>📞 ' + esc(p.telefono) + '</span>' : '';
+          const dxSpan         = p.diagnostico ? '<span class="badge badge-info">' + esc(p.diagnostico) + '</span>' : '';
+          const osSpan         = p.obra_social ? '<span class="badge badge-neutral">' + esc(p.obra_social) + '</span>' : '';
+          const sesionLabel    = p.total_sesiones !== 1 ? 'es' : '';
+          const ultimaSpan     = p.ultima_sesion ? '<span class="text-light">Última: ' + fmtDate(p.ultima_sesion) + '</span>' : '';
+          const pendSpan       = p.pagos_pendientes > 0
+            ? '<span class="badge badge-warning">⚠ ' + Number(p.monto_pendiente).toLocaleString('es-AR', {minimumFractionDigits:0}) + ' pendiente</span>' : '';
+          const creditoSpan    = p.credito > 0 ? '<span class="badge badge-success">Crédito: ' + fmtMoney(p.credito) + '</span>' : '';
+          const accionesHTML   = _filtroEstado === 'inactivo'
+            ? '<button class="btn btn-ghost btn-sm" onclick="reactivarPaciente(' + p.id + ', \'' + esc(p.nombre) + '\')">↩ Reactivar</button>'
+              + '<button class="btn btn-danger btn-sm" onclick="eliminarPacienteDefinitivo(' + p.id + ', \'' + esc(p.nombre) + ' ' + esc(p.apellido) + '\')">🗑 Eliminar</button>'
+            : '<a href="#/paciente/' + p.id + '" class="btn btn-primary btn-sm">Ver ficha →</a>';
+          return '<div class="paciente-card card">'
+            + '<div class="paciente-avatar">' + esc(p.nombre[0]) + esc(p.apellido[0]) + '</div>'
+            + '<div class="paciente-info">'
+            + '<h3>' + esc(p.apellido) + ', ' + esc(p.nombre) + ' ' + motivoBadge + '</h3>'
+            + '<div class="paciente-meta">'
+            + dniSpan + telSpan + dxSpan + osSpan
+            + '<span>📋 ' + p.total_sesiones + ' sesión' + sesionLabel + '</span>'
+            + ultimaSpan + pendSpan + creditoSpan
+            + '</div>'
+            + '</div>'
+            + '<div style="display:flex;gap:.4rem;flex-shrink:0">' + accionesHTML + '</div>'
+            + '</div>';
+        }).join('')
+      : '<div class="empty-state"><p>No se encontraron pacientes con ese criterio.</p></div>';
 
     const filtrosEspacio = [
       { val: '',           label: 'Todos los espacios' },
@@ -464,6 +484,11 @@ function debounceSearch(val) {
 async function renderFicha(id, tab = 'datos') {
   const app = document.getElementById('app');
   app.innerHTML = '<div class="loading-initial">Cargando...</div>';
+  // Limpiar cache del paciente anterior para evitar que acciones sobre sesiones/pagos
+  // operen con datos desactualizados si el usuario navega rápido entre fichas
+  cache.paciente = null;
+  cache.sesiones = [];
+  cache.pagos    = [];
   try {
     const p = await api('GET', `/pacientes/${id}`);
     cache.paciente = p;
@@ -866,7 +891,6 @@ function _formPaciente(p = {}) {
           <option value="Particular" ${selOS('Particular')}>Particular</option>
           <option value="La Ventana" ${selOS('La Ventana')}>La Ventana</option>
         </select>
-      </div>
     </div>
     <div id="valor-hora-group" class="form-group" style="${mostrarValorHora ? '' : 'display:none'}">
       <label class="form-label">
@@ -1239,6 +1263,7 @@ function marcarSesionCompleta(sesionId, pacienteId) {
     renderFicha(pacienteId, 'sesiones');
   }, 'Marcar como completada');
 }
+
 
 function selTipo(s, v) { return (s.tipo_sesion||'individual') === v ? 'checked' : ''; }
 
@@ -1712,16 +1737,22 @@ function _lunesDe(date) {
   return d;
 }
 
+/** Formatea un objeto Date como YYYY-MM-DD usando getters locales (sin UTC) */
+function _fmtLocalDate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
 function _rangoActual() {
   if (_calVista === 'dia' && _calDia) return { inicio: _calDia, fin: _calDia };
   if (_calVista === 'semana') {
     const lunes = _lunesDe(new Date());
     lunes.setDate(lunes.getDate() + _calSemanaOffset * 7);
     const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 6);
-    return { inicio: lunes.toISOString().split('T')[0], fin: domingo.toISOString().split('T')[0], lunes, domingo };
+    return { inicio: _fmtLocalDate(lunes), fin: _fmtLocalDate(domingo), lunes, domingo };
   }
-  const inicio = `${_calYear}-${String(_calMonth+1).padStart(2,'0')}-01`;
-  const fin    = new Date(_calYear, _calMonth+1, 0).toISOString().split('T')[0];
+  const inicio = _calYear + '-' + String(_calMonth+1).padStart(2,'0') + '-01';
+  const lastDay = new Date(_calYear, _calMonth+1, 0);
+  const fin = _fmtLocalDate(lastDay);
   return { inicio, fin };
 }
 
@@ -1730,25 +1761,49 @@ async function renderCalendario() {
   app.innerHTML = '<div class="loading-initial">Cargando calendario...</div>';
   try {
     let fetchYear = _calYear, fetchMonth = _calMonth + 1;
+    let fetchYear2 = null, fetchMonth2 = null; // segundo mes si la semana cruza
     if (_calVista === 'semana') {
       const lunes = _lunesDe(new Date());
       lunes.setDate(lunes.getDate() + _calSemanaOffset * 7);
+      const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 6);
       fetchYear = lunes.getFullYear(); fetchMonth = lunes.getMonth() + 1;
+      // Si el domingo cae en otro mes, hay que pedir ese mes también
+      if (domingo.getMonth() !== lunes.getMonth() || domingo.getFullYear() !== lunes.getFullYear()) {
+        fetchYear2 = domingo.getFullYear(); fetchMonth2 = domingo.getMonth() + 1;
+      }
     } else if (_calVista === 'dia' && _calDia) {
       const [y, m] = _calDia.split('-');
       fetchYear = parseInt(y); fetchMonth = parseInt(m);
     }
 
-    const res  = await fetch(`/api/calendar/events?year=${fetchYear}&month=${fetchMonth}`);
-    const data = await res.json();
+    const fetches = [fetch('/api/calendar/events?year=' + fetchYear + '&month=' + fetchMonth)];
+    if (fetchYear2) fetches.push(fetch('/api/calendar/events?year=' + fetchYear2 + '&month=' + fetchMonth2));
+    const responses = await Promise.all(fetches);
+    const datas     = await Promise.all(responses.map(function(r) { return r.json(); }));
+
+    // Fusionar sesiones y eventos de GCal de ambas respuestas (sin duplicados)
+    const seenSesiones = new Set();
+    const seenGcal     = new Set();
+    const allSesiones  = [];
+    const allGcal      = [];
+    for (const data of datas) {
+      for (const s of (data.sesiones || [])) {
+        const key = s.fecha + '_' + (s.paciente_id||'') + '_' + (s.hora||'');
+        if (!seenSesiones.has(key)) { seenSesiones.add(key); allSesiones.push(s); }
+      }
+      for (const e of (data.gcalEventos || [])) {
+        if (!seenGcal.has(e.id)) { seenGcal.add(e.id); allGcal.push(e); }
+      }
+    }
+    const data = datas[0]; // para gcalEstado y año/mes
 
     const evMap = {};
-    for (const s of (data.sesiones || [])) {
+    for (const s of allSesiones) {
       if (!evMap[s.fecha]) evMap[s.fecha] = [];
-      evMap[s.fecha].push({ tipo:'sesion', titulo:`🧠 ${s.nombre} ${s.apellido}`,
+      evMap[s.fecha].push({ tipo:'sesion', titulo:'🧠 ' + s.nombre + ' ' + s.apellido,
         hora:s.hora, min:s.duracion_minutos, pacienteId:s.paciente_id, tipo_sesion:s.tipo_sesion });
     }
-    for (const e of (data.gcalEventos || [])) {
+    for (const e of allGcal) {
       if (!evMap[e.fecha]) evMap[e.fecha] = [];
       evMap[e.fecha].push({ tipo:'gcal', titulo:e.titulo, hora:e.hora });
     }
@@ -1832,9 +1887,10 @@ async function modalNuevaSesionCalendario(fechaPreset) {
 
   function buildOpciones(lista) {
     if (!lista.length) return '<option value="">No hay pacientes cargados</option>';
-    return lista.map(p =>
-      `<option value="${p.id}">${esc(p.apellido)}, ${esc(p.nombre)}${p.obra_social ? ` — ${esc(p.obra_social)}` : ''}</option>`
-    ).join('');
+    return lista.map(function(p) {
+      const osLabel = p.obra_social ? ' — ' + esc(p.obra_social) : '';
+      return '<option value="' + p.id + '">' + esc(p.apellido) + ', ' + esc(p.nombre) + osLabel + '</option>';
+    }).join('');
   }
 
   const opcionesPacientes = buildOpciones(pacientes);
@@ -1979,25 +2035,23 @@ function _buildMonthGrid(year, month, evMap) {
 }
 
 function _buildWeekGrid(lunes, evMap) {
-  const today = new Date();
   let html = '';
   for (let i=0;i<7;i++) {
     const d = new Date(lunes); d.setDate(lunes.getDate()+i);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = _fmtLocalDate(d);
     const evs = evMap[dateStr]||[];
     const isToday = d.toDateString()===new Date().toDateString();
-    html += `
-      <div class="cal-cell cal-cell-semana ${isToday?'cal-today':''} ${_calDia===dateStr?'cal-selected':''}"
-           onclick="calVerDia('${dateStr}')">
-        <span class="cal-day-num">${d.getDate()}</span>
-        <div class="cal-cell-evs">
-          ${evs.slice(0,4).map(e =>
-            `<div class="cal-cell-ev cal-cell-ev-${e.tipo}">
-              ${e.hora?`<span style="font-weight:700;margin-right:.2rem">${e.hora}</span>`:''}${esc(e.titulo)}
-             </div>`).join('')}
-          ${evs.length>4?`<div class="cal-cell-ev-more">+${evs.length-4} más</div>`:''}
-        </div>
-      </div>`;
+    const todayClass   = isToday ? 'cal-today' : '';
+    const selectedClass = _calDia===dateStr ? 'cal-selected' : '';
+    const evsHTML = evs.slice(0,4).map(function(e) {
+      const horaSpan = e.hora ? '<span style="font-weight:700;margin-right:.2rem">' + e.hora + '</span>' : '';
+      return '<div class="cal-cell-ev cal-cell-ev-' + e.tipo + '">' + horaSpan + esc(e.titulo) + '</div>';
+    }).join('');
+    const masHTML = evs.length>4 ? '<div class="cal-cell-ev-more">+' + (evs.length-4) + ' más</div>' : '';
+    html += '<div class="cal-cell cal-cell-semana ' + todayClass + ' ' + selectedClass + '" onclick="calVerDia(\'' + dateStr + '\')">'
+      + '<span class="cal-day-num">' + d.getDate() + '</span>'
+      + '<div class="cal-cell-evs">' + evsHTML + masHTML + '</div>'
+      + '</div>';
   }
   return html;
 }
@@ -2125,6 +2179,64 @@ function conectarGoogleCalendar() {
 }
 
 
+// ─── SYNC DB CON DRIVE ────────────────────────────────────────────────────────
+
+/**
+ * Al cargar la app, consulta si Drive tiene una versión más nueva de la DB.
+ * Si la tiene, muestra un modal preguntando qué versión usar.
+ */
+async function checkDBSyncStatus() {
+  try {
+    const status = await fetch('/api/db/sync-status').then(r => r.json());
+    actualizarSyncNavbar(status);
+    if (!status.chequeado || !status.driveEsNewer) return;
+
+    function fmtDateTime(iso) {
+      if (!iso) return '–';
+      const d = new Date(iso);
+      return d.toLocaleDateString('es-AR') + ' a las ' +
+        d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    const fechaDrive = fmtDateTime(status.driveModified);
+    const fechaLocal = fmtDateTime(status.localModified);
+
+    openModal('\u2601\uFE0F Versión más reciente en Drive',
+      '<p>Se detectó una versión de la base de datos en <strong>Google Drive más reciente</strong> que la local.</p>'
+      + '<div style="display:flex;flex-direction:column;gap:.6rem;margin:1rem 0;font-size:.9rem">'
+      + '<div style="padding:.65rem 1rem;background:var(--primary-light);border-radius:7px">'
+      + '\u2601\uFE0F <strong>Drive:</strong> guardada el ' + fechaDrive
+      + '</div>'
+      + '<div style="padding:.65rem 1rem;background:var(--bg);border-radius:7px;border:1px solid var(--border)">'
+      + '\uD83D\uDCBB <strong>Esta PC:</strong> ' + (fechaLocal !== '–' ? 'modificada el ' + fechaLocal : 'sin datos previos')
+      + '</div>'
+      + '</div>'
+      + '<p class="text-light" style="font-size:.85rem">\u26A0 Si usás la versión de Drive, <strong>la base de datos local se reemplazará</strong> y la app se reiniciará. Elegí la versión más reciente para no perder datos.</p>',
+      async () => {
+        showToast('Descargando versión de Drive...', 'info');
+        const res  = await fetch('/api/db/usar-drive', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error al descargar desde Drive');
+        closeModal();
+        document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;'
+          + 'justify-content:center;height:100vh;font-family:sans-serif;color:#555;gap:1rem">'
+          + '<div style="font-size:3rem">\uD83D\uDD04</div>'
+          + '<h2 style="margin:0">Actualizando base de datos...</h2>'
+          + '<p style="margin:0;color:#999">La app se reiniciará en unos segundos.</p>'
+          + '</div>';
+        setTimeout(function() { window.location.reload(); }, 4000);
+      },
+      'Usar versión de Drive'
+    );
+
+    const btnCancelar = document.querySelector('.modal-footer .btn-ghost');
+    if (btnCancelar) btnCancelar.textContent = 'Continuar con la versión local';
+
+  } catch (e) {
+    console.warn('checkDBSyncStatus error:', e.message);
+  }
+}
+
 function confirmarCerrarServidor() {
   openModal('Cerrar PsiApp',
     `<p>¿Cerrar la aplicación?</p>
@@ -2195,4 +2307,16 @@ function _selectHora(valorActual = '') {
 }
 
 window.addEventListener('hashchange', router);
-document.addEventListener('DOMContentLoaded', () => { router(); checkDriveStatus(); });
+document.addEventListener('DOMContentLoaded', () => {
+  // Insertar el indicador de sync en el navbar, al lado del botón ChatGPT
+  const navExport = document.querySelector('.nav-export');
+  if (navExport) {
+    const syncEl = document.createElement('span');
+    syncEl.id = 'sync-label';
+    syncEl.style.cssText = 'font-size:.74rem;color:rgba(255,255,255,.65);white-space:nowrap;align-self:center;padding:0 .25rem';
+    navExport.insertBefore(syncEl, navExport.firstChild);
+  }
+  router();
+  checkDriveStatus();
+  checkDBSyncStatus();
+});
